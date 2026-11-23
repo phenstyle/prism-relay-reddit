@@ -4,7 +4,10 @@ import type {
   GridCell,
   TraceResult,
 } from '../../shared/puzzleEngine';
-import { COLOR_META } from '../../shared/puzzleEngine';
+import { COLOR_META, formatCoord } from '../../shared/puzzleEngine';
+
+const COL_LABELS = ['A', 'B', 'C', 'D', 'E', 'F'] as const;
+const ROW_LABELS = ['1', '2', '3', '4', '5', '6'] as const;
 
 type OpticalBoardProps = {
   grid: GridCell[][];
@@ -73,6 +76,7 @@ export const OpticalBoard = ({
 }: OpticalBoardProps) => {
   const size = grid.length;
   const viewBoxSize = size * CELL_UNIT;
+  const activeCoord = reviewHighlight ?? hintCell ?? null;
 
   const receptorMap = new Map<string, TraceResult['receptors'][number]>();
   for (const rec of trace.receptors) {
@@ -80,34 +84,82 @@ export const OpticalBoard = ({
   }
 
   return (
-    <div className="relative w-full aspect-square max-w-[412px] mx-auto select-none rounded-[20px] bg-gradient-to-b from-[#2b2520] to-[#1a1613] border-2 border-[#b8893a]/80 shadow-[0_18px_40px_rgba(28,25,23,0.28),inset_0_1px_0_rgba(245,215,150,0.35)] p-2.5">
-      {/* Subtle brass corner pins */}
-      <span className="pointer-events-none absolute top-1.5 left-1.5 w-1.5 h-1.5 rounded-full bg-[#d4a957]/80" />
-      <span className="pointer-events-none absolute top-1.5 right-1.5 w-1.5 h-1.5 rounded-full bg-[#d4a957]/80" />
-      <span className="pointer-events-none absolute bottom-1.5 left-1.5 w-1.5 h-1.5 rounded-full bg-[#d4a957]/80" />
-      <span className="pointer-events-none absolute bottom-1.5 right-1.5 w-1.5 h-1.5 rounded-full bg-[#d4a957]/80" />
+    <div className="relative w-full max-w-[424px] mx-auto select-none rounded-[22px] bg-gradient-to-b from-[#332c25] via-[#221d18] to-[#15120f] border-2 border-[#c69745]/90 shadow-[0_20px_44px_rgba(28,25,23,0.34),inset_0_1px_0_rgba(252,226,166,0.42),inset_0_-1px_0_rgba(0,0,0,0.65)] p-2.5 pt-2 pl-2">
+      {/* Recessed brass corner pins */}
+      <span className="pointer-events-none absolute top-1.5 left-1.5 w-1.5 h-1.5 rounded-full bg-gradient-to-br from-[#f6dfa2] to-[#8c6220] shadow-xs" />
+      <span className="pointer-events-none absolute top-1.5 right-1.5 w-1.5 h-1.5 rounded-full bg-gradient-to-br from-[#f6dfa2] to-[#8c6220] shadow-xs" />
+      <span className="pointer-events-none absolute bottom-1.5 left-1.5 w-1.5 h-1.5 rounded-full bg-gradient-to-br from-[#f6dfa2] to-[#8c6220] shadow-xs" />
+      <span className="pointer-events-none absolute bottom-1.5 right-1.5 w-1.5 h-1.5 rounded-full bg-gradient-to-br from-[#f6dfa2] to-[#8c6220] shadow-xs" />
 
-      {/* Optical slate stage + luminous SVG rays */}
-      <svg
-        viewBox={`0 0 ${viewBoxSize} ${viewBoxSize}`}
-        className="w-full h-full block rounded-xl bg-[#131110]"
-        role="img"
-        aria-label="Prism Relay 6 by 6 optical board"
-      >
-        <defs>
-          <filter id="beam-glow" x="-30%" y="-30%" width="160%" height="160%">
-            <feGaussianBlur stdDeviation="4.5" result="blur" />
-            <feMerge>
-              <feMergeNode in="blur" />
-              <feMergeNode in="SourceGraphic" />
-            </feMerge>
-          </filter>
-          <linearGradient id="brass-bevel" x1="0" y1="0" x2="1" y2="1">
-            <stop offset="0%" stopColor="#e5c17a" />
-            <stop offset="50%" stopColor="#b8893a" />
-            <stop offset="100%" stopColor="#7c5b22" />
-          </linearGradient>
-        </defs>
+      {/* Top Algebraic File Rim (A - F) */}
+      <div className="grid grid-cols-[16px_1fr] items-center mb-1">
+        <span />
+        <div className="grid grid-cols-6 text-center text-[10px] font-mono font-bold tracking-widest select-none">
+          {COL_LABELS.slice(0, size).map((letter, idx) => (
+            <span
+              key={letter}
+              className={
+                activeCoord?.col === idx
+                  ? 'text-amber-300 drop-shadow-[0_0_6px_rgba(251,191,36,0.75)]'
+                  : 'text-[#d4ab62]/75'
+              }
+            >
+              {letter}
+            </span>
+          ))}
+        </div>
+      </div>
+
+      {/* Left Algebraic Rank Rim (1 - 6) + Pixel-Locked 6x6 Optical Stage */}
+      <div className="grid grid-cols-[16px_1fr] items-stretch">
+        <div className="grid grid-rows-6 items-center justify-items-center text-[10px] font-mono font-bold select-none pr-0.5">
+          {ROW_LABELS.slice(0, size).map((num, idx) => (
+            <span
+              key={num}
+              className={
+                activeCoord?.row === idx
+                  ? 'text-amber-300 drop-shadow-[0_0_6px_rgba(251,191,36,0.75)]'
+                  : 'text-[#d4ab62]/75'
+              }
+            >
+              {num}
+            </span>
+          ))}
+        </div>
+
+        <div className="relative w-full aspect-square rounded-xl overflow-hidden ring-1 ring-[#c69745]/40 shadow-[inset_0_2px_10px_rgba(0,0,0,0.85)]">
+          {/* Optical slate stage + luminous SVG rays */}
+          <svg
+            viewBox={`0 0 ${viewBoxSize} ${viewBoxSize}`}
+            className="w-full h-full block bg-[#12100f]"
+            role="img"
+            aria-label="Prism Relay 6 by 6 optical board with A1 to F6 coordinates"
+          >
+            <defs>
+              <radialGradient id="obsidian-stage" cx="50%" cy="42%" r="65%">
+                <stop offset="0%" stopColor="#1d1916" />
+                <stop offset="100%" stopColor="#0f0d0c" />
+              </radialGradient>
+              <filter id="beam-glow" x="-30%" y="-30%" width="160%" height="160%">
+                <feGaussianBlur stdDeviation="4.5" result="blur" />
+                <feMerge>
+                  <feMergeNode in="blur" />
+                  <feMergeNode in="SourceGraphic" />
+                </feMerge>
+              </filter>
+              <linearGradient id="brass-bevel" x1="0" y1="0" x2="1" y2="1">
+                <stop offset="0%" stopColor="#f3d693" />
+                <stop offset="50%" stopColor="#c29242" />
+                <stop offset="100%" stopColor="#7c5b22" />
+              </linearGradient>
+            </defs>
+            <rect
+              x={0}
+              y={0}
+              width={viewBoxSize}
+              height={viewBoxSize}
+              fill="url(#obsidian-stage)"
+            />
 
         {/* Base inlaid slate tiles */}
         {grid.map((rowCells, r) =>
@@ -467,10 +519,10 @@ export const OpticalBoard = ({
         ) : null}
       </svg>
 
-      {/* Accessible interactive hit targets */}
+      {/* Accessible interactive hit targets (pixel-locked to 6x6 SVG stage) */}
       {interactive ? (
         <div
-          className="absolute inset-2.5 grid"
+          className="absolute inset-0 grid"
           style={{
             gridTemplateColumns: `repeat(${size}, minmax(0, 1fr))`,
             gridTemplateRows: `repeat(${size}, minmax(0, 1fr))`,
@@ -492,10 +544,10 @@ export const OpticalBoard = ({
                 );
               }
 
-              const kindLabel =
-                editorMode
-                  ? `Edit cell row ${r + 1}, column ${c + 1}`
-                  : `Rotate ${cell.kind === 'splitter' ? 'beam splitter' : 'mirror'} at row ${r + 1}, column ${c + 1}`;
+              const coord = formatCoord(r, c);
+              const kindLabel = editorMode
+                ? `Edit cell ${coord}`
+                : `Rotate ${cell.kind === 'splitter' ? 'beam splitter' : 'mirror'} at ${coord}`;
               return (
                 <button
                   key={`hit-${r}-${c}`}
@@ -521,6 +573,8 @@ export const OpticalBoard = ({
           )}
         </div>
       ) : null}
+        </div>
+      </div>
     </div>
   );
 };

@@ -913,25 +913,65 @@ export const getHintCell = (
   return fallback;
 };
 
+const COL_LABELS = ['A', 'B', 'C', 'D', 'E', 'F'] as const;
+
+export const formatCoord = (row: number, col: number): string => {
+  const colLetter = COL_LABELS[col] ?? String.fromCharCode(65 + col);
+  return `${colLetter}${row + 1}`;
+};
+
+export const formatMoveNotation = (
+  gridAfter: GridCell[][],
+  row: number,
+  col: number,
+  prevMatchedCount: number,
+  traceAfter?: TraceResult
+): string => {
+  const cell = gridAfter[row]?.[col];
+  const coord = formatCoord(row, col);
+  if (!cell || (cell.kind !== 'mirror' && cell.kind !== 'splitter')) {
+    return coord;
+  }
+  const prefix = cell.kind === 'splitter' ? 'S' : '';
+  const angleChar = cell.orientation === 0 ? '/' : '\\';
+  const trace = traceAfter ?? traceBeams(gridAfter);
+  const matchedAfter = trace.receptors.filter((r) => r.matched).length;
+  const suffix = trace.isSolved ? '⚡' : matchedAfter > prevMatchedCount ? '+' : '';
+  return `${prefix}${coord}${angleChar}${suffix}`;
+};
+
 export type ReplayStep = {
   grid: GridCell[][];
   tappedCell: { row: number; col: number } | null;
+  notation: string;
 };
 
 export const buildOptimalParReplay = (
   initialGrid: GridCell[][],
   solutionOrientations: Record<string, MirrorOrientation>
 ): ReplayStep[] => {
-  const steps: ReplayStep[] = [{ grid: cloneGrid(initialGrid), tappedCell: null }];
+  const steps: ReplayStep[] = [
+    { grid: cloneGrid(initialGrid), tappedCell: null, notation: 'Start' },
+  ];
   let current = cloneGrid(initialGrid);
+  let prevMatched = traceBeams(current).receptors.filter((r) => r.matched).length;
   for (let guard = 0; guard < 12; guard++) {
     if (traceBeams(current).isSolved) break;
     const nextCell = getHintCell(current, solutionOrientations);
     if (!nextCell) break;
     const nextGrid = toggleTileAt(current, nextCell.row, nextCell.col);
     if (!nextGrid) break;
+    const nextTrace = traceBeams(nextGrid);
+    const notation = formatMoveNotation(
+      nextGrid,
+      nextCell.row,
+      nextCell.col,
+      prevMatched,
+      nextTrace
+    );
     current = nextGrid;
-    steps.push({ grid: cloneGrid(current), tappedCell: nextCell });
+    prevMatched = nextTrace.receptors.filter((r) => r.matched).length;
+    steps.push({ grid: cloneGrid(current), tappedCell: nextCell, notation });
   }
   return steps;
 };

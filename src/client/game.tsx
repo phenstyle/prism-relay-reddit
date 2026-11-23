@@ -22,6 +22,7 @@ import {
   cloneGrid,
   formatDateKeyUtc,
   formatDuration,
+  formatMoveNotation,
   getDailyPuzzle,
   getDateKeyForPuzzleNumber,
   getHintCell,
@@ -95,7 +96,7 @@ export const App = () => {
   );
   const [history, setHistory] = useState<GridCell[][][]>([]);
   const [moveSteps, setMoveSteps] = useState<ReplayStep[]>(() => [
-    { grid: cloneGrid(dailyPuzzle.grid), tappedCell: null },
+    { grid: cloneGrid(dailyPuzzle.grid), tappedCell: null, notation: 'Start' },
   ]);
   const [moves, setMoves] = useState<number>(0);
   const [elapsedMs, setElapsedMs] = useState<number>(0);
@@ -158,7 +159,7 @@ export const App = () => {
     }
     setGrid(cloneGrid(nextGrid));
     setHistory([]);
-    setMoveSteps([{ grid: cloneGrid(nextGrid), tappedCell: null }]);
+    setMoveSteps([{ grid: cloneGrid(nextGrid), tappedCell: null, notation: 'Start' }]);
     setMoves(0);
     setElapsedMs(0);
     setHintCell(null);
@@ -319,10 +320,17 @@ export const App = () => {
     const nextTrace = traceBeams(next);
     const nextMatched = nextTrace.receptors.filter((r) => r.matched).length;
 
+    const notation = formatMoveNotation(
+      next,
+      row,
+      col,
+      prevMatchedCountRef.current,
+      nextTrace
+    );
     setHistory((prev) => [...prev, grid]);
     setMoveSteps((prev) => [
       ...prev,
-      { grid: cloneGrid(next), tappedCell: { row, col } },
+      { grid: cloneGrid(next), tappedCell: { row, col }, notation },
     ]);
     setGrid(next);
     setMoves(nextMoves);
@@ -476,49 +484,86 @@ export const App = () => {
           onTileTap={handleTileTap}
         />
 
-        {/* Compact Color Mix Key or Move Review Step Readout + Crystal Counter */}
-        <div className="w-full max-w-[412px] flex flex-wrap items-center justify-between gap-2 px-1 text-[11px] text-stone-700">
-          <div className="flex flex-wrap items-center gap-1.5">
-            {isReviewing ? (
-              <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-amber-100 border border-amber-300 text-amber-950 font-semibold">
-                {reviewSource === 'par' ? '⚡ Optimal Par' : 'Move Review'} ·{' '}
-                {reviewIndex === 0
-                  ? 'Start'
-                  : `Move ${reviewIndex}/${Math.max(1, activeReplaySteps.length - 1)}`}
-              </span>
-            ) : (
-              activeRecipes.map(({ mask, recipe }) => {
-                const meta = COLOR_META[mask];
-                return (
+        {/* Color Mix Key (while playing) OR Clickable Algebraic Move Notation Tape (during Review) */}
+        <div className="w-full max-w-[424px] flex flex-col gap-1.5 px-1 text-[11px] text-stone-700">
+          {isReviewing ? (
+            <>
+              <div className="flex items-center justify-between gap-2">
+                <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-amber-100/90 border border-amber-300 text-amber-950 font-semibold">
+                  {reviewSource === 'par' ? '⚡ Optimal Route' : 'Your Route'} ·{' '}
+                  {reviewIndex === 0
+                    ? 'Start'
+                    : `${reviewIndex}. ${activeReplaySteps[reviewIndex]?.notation ?? ''}`}
+                </span>
+                <div className="font-semibold text-stone-800 whitespace-nowrap">
+                  Crystals:{' '}
                   <span
-                    key={mask}
-                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-white/90 border border-stone-300 shadow-xs"
+                    className={
+                      displayTrace.isSolved ? 'text-emerald-700' : 'text-[#8c6220]'
+                    }
                   >
-                    <span className="text-stone-600 font-medium">{recipe} =</span>
-                    <span style={{ color: meta.hex }} className="font-bold">
-                      {meta.symbol} {meta.name}
-                    </span>
+                    {matchedCount}/{displayTrace.receptors.length}
                   </span>
-                );
-              })
-            )}
-          </div>
-
-          <div className="font-semibold text-stone-800">
-            Crystals:{' '}
-            <span
-              className={
-                displayTrace.isSolved ? 'text-emerald-700' : 'text-[#8c6220]'
-              }
-            >
-              {matchedCount}/{displayTrace.receptors.length}
-            </span>
-          </div>
+                </div>
+              </div>
+              <div className="flex items-center gap-1 overflow-x-auto pb-0.5">
+                {activeReplaySteps.map((step, idx) => {
+                  const isCurrent = idx === reviewIndex;
+                  return (
+                    <button
+                      key={`${reviewSource}-${idx}`}
+                      type="button"
+                      onClick={() => {
+                        setReviewPlaying(false);
+                        setReviewIndex(idx);
+                      }}
+                      className={`px-2 py-0.5 rounded-md font-mono text-[11px] font-semibold whitespace-nowrap cursor-pointer transition-colors border ${
+                        isCurrent
+                          ? 'bg-[#1c1917] text-amber-300 border-[#c69745] shadow-xs'
+                          : 'bg-white/85 text-stone-700 border-stone-300 hover:bg-amber-50'
+                      }`}
+                    >
+                      {idx === 0 ? 'Start' : `${idx}. ${step.notation}`}
+                    </button>
+                  );
+                })}
+              </div>
+            </>
+          ) : (
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex flex-wrap items-center gap-1.5">
+                {activeRecipes.map(({ mask, recipe }) => {
+                  const meta = COLOR_META[mask];
+                  return (
+                    <span
+                      key={mask}
+                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-white/90 border border-stone-300 shadow-xs"
+                    >
+                      <span className="text-stone-600 font-medium">{recipe} =</span>
+                      <span style={{ color: meta.hex }} className="font-bold">
+                        {meta.symbol} {meta.name}
+                      </span>
+                    </span>
+                  );
+                })}
+              </div>
+              <div className="font-semibold text-stone-800 whitespace-nowrap">
+                Crystals:{' '}
+                <span
+                  className={
+                    displayTrace.isSolved ? 'text-emerald-700' : 'text-[#8c6220]'
+                  }
+                >
+                  {matchedCount}/{displayTrace.receptors.length}
+                </span>
+              </div>
+            </div>
+          )}
         </div>
       </main>
 
       {/* Bottom Craft Control Dock (Switches to Chess-style Move Review scrubber after solve) */}
-      <footer className="w-full max-w-[412px] mx-auto flex items-center justify-between gap-1.5 pt-1">
+      <footer className="w-full max-w-[424px] mx-auto flex items-center justify-between gap-1.5 pt-1">
         {isReviewing ? (
           <>
             <div className="flex items-center gap-1">
@@ -579,25 +624,25 @@ export const App = () => {
               </button>
             </div>
             <div className="flex items-center gap-1">
-              {moves > boardMeta.par ? (
-                <button
-                  type="button"
-                  onClick={() => {
-                    const nextSrc = reviewSource === 'yours' ? 'par' : 'yours';
-                    enterMoveReview(false, nextSrc);
-                  }}
-                  className="px-2.5 py-2 rounded-xl text-xs font-bold bg-white/90 border border-amber-400 text-amber-900 cursor-pointer hover:bg-amber-50 whitespace-nowrap"
-                >
-                  {reviewSource === 'yours' ? `⚡ Par` : 'Yours'}
-                </button>
-              ) : null}
+              <button
+                type="button"
+                onClick={() => {
+                  const nextSrc = reviewSource === 'yours' ? 'par' : 'yours';
+                  enterMoveReview(true, nextSrc);
+                }}
+                className="px-2.5 py-2 rounded-xl text-xs font-bold bg-white/90 border border-amber-400 text-amber-900 cursor-pointer hover:bg-amber-50 whitespace-nowrap"
+              >
+                {reviewSource === 'yours'
+                  ? `⚡ Optimal (${boardMeta.par})`
+                  : `Yours (${moves})`}
+              </button>
               <button
                 type="button"
                 onClick={() => {
                   setReviewPlaying(false);
                   setShowVictory(true);
                 }}
-                className="px-3 py-2 rounded-xl text-xs font-bold bg-emerald-700 text-white cursor-pointer hover:bg-emerald-800"
+                className="px-3 py-2 rounded-xl text-xs font-bold bg-emerald-700 text-white cursor-pointer hover:bg-emerald-800 whitespace-nowrap"
               >
                 Results
               </button>
@@ -783,8 +828,41 @@ export const App = () => {
               </div>
             ) : null}
 
+            {/* Route Notation Summary & Optimal Comparison */}
+            <div className="rounded-xl bg-white/90 border border-amber-300/80 p-2.5 space-y-1.5 text-left">
+              <div className="flex items-center justify-between text-[11px]">
+                <span className="font-bold text-stone-800">
+                  {moves > boardMeta.par
+                    ? `⚡ Quicker route exists (${boardMeta.par} moves · saves ${moves - boardMeta.par})`
+                    : `⚡ Optimal Par Route (${boardMeta.par} moves)`}
+                </span>
+              </div>
+              <div className="text-[11px] font-mono text-stone-700 bg-[#f5efe4]/80 rounded-lg px-2 py-1 border border-stone-200 overflow-x-auto whitespace-nowrap">
+                {optimalParSteps
+                  .slice(1)
+                  .map((s, idx) => `${idx + 1}. ${s.notation}`)
+                  .join('  ')}
+              </div>
+            </div>
+
             {/* Actions */}
             <div className="flex flex-col gap-2">
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => enterMoveReview(true, 'yours')}
+                  className="py-2 px-3 rounded-xl text-xs font-bold bg-white border border-stone-300 text-stone-900 hover:bg-stone-100 cursor-pointer"
+                >
+                  ▶ Your Moves ({moves})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => enterMoveReview(true, 'par')}
+                  className="py-2 px-3 rounded-xl text-xs font-bold bg-amber-100 border border-amber-400 text-amber-950 hover:bg-amber-200/70 cursor-pointer"
+                >
+                  ⚡ Optimal Route ({boardMeta.par})
+                </button>
+              </div>
               <button
                 type="button"
                 onClick={() => {
@@ -797,29 +875,22 @@ export const App = () => {
               <div className="grid grid-cols-2 gap-2">
                 <button
                   type="button"
-                  onClick={() => enterMoveReview(true, 'yours')}
-                  className="py-2 px-3 rounded-xl text-xs font-bold bg-amber-100 border border-amber-300 text-amber-950 hover:bg-amber-200/70 cursor-pointer"
+                  onClick={() => {
+                    setShowVictory(false);
+                    setShowCreator(true);
+                  }}
+                  className="py-1.5 px-3 rounded-xl text-[11px] font-semibold bg-white/80 border border-stone-300 text-stone-700 hover:bg-white cursor-pointer"
                 >
-                  ▶ Review Moves
+                  + Create Puzzle
                 </button>
                 <button
                   type="button"
                   onClick={handleSwitchPractice}
-                  className="py-2 px-3 rounded-xl text-xs font-semibold bg-white border border-stone-300 text-stone-800 hover:bg-stone-100 cursor-pointer"
+                  className="py-1.5 px-3 rounded-xl text-[11px] font-semibold bg-white/80 border border-stone-300 text-stone-700 hover:bg-white cursor-pointer"
                 >
                   Next Archive Board
                 </button>
               </div>
-              <button
-                type="button"
-                onClick={() => {
-                  setShowVictory(false);
-                  setShowCreator(true);
-                }}
-                className="w-full py-1.5 px-3 rounded-xl text-[11px] font-semibold bg-white/70 border border-stone-300 text-stone-700 hover:bg-white cursor-pointer"
-              >
-                + Build &amp; Post Your Own Puzzle
-              </button>
             </div>
           </div>
         </div>

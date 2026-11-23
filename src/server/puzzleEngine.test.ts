@@ -166,8 +166,12 @@ void describe('Prism Relay puzzleEngine', () => {
     assert.equal(scrambledCheck.valid, true);
   });
 
-  void it('builds an exact-Par step-by-step move review replay', async () => {
-    const { buildOptimalParReplay } = await import('../shared/puzzleEngine.ts');
+  void it('builds an exact-Par step-by-step move review replay with algebraic notation', async () => {
+    const { buildOptimalParReplay, formatCoord } = await import(
+      '../shared/puzzleEngine.ts'
+    );
+    assert.equal(formatCoord(0, 0), 'A1');
+    assert.equal(formatCoord(5, 5), 'F6');
     const puzzle = getDailyPuzzle('2026-11-22');
     const steps = buildOptimalParReplay(
       puzzle.grid,
@@ -175,9 +179,14 @@ void describe('Prism Relay puzzleEngine', () => {
     );
     assert.equal(steps.length, puzzle.par + 1);
     assert.equal(steps[0]?.tappedCell, null);
+    assert.equal(steps[0]?.notation, 'Start');
     assert.equal(traceBeams(steps[0]!.grid).isSolved, false);
     const last = steps[steps.length - 1];
     assert.ok(last?.tappedCell, 'Final replay step should record tapped cell');
+    assert.ok(
+      last.notation.endsWith('⚡'),
+      `Final notation should mark solve with ⚡, got: ${last.notation}`
+    );
     assert.equal(traceBeams(last.grid).isSolved, true);
   });
 });
