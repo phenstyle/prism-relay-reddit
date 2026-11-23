@@ -57,6 +57,7 @@ export type BeamSegment = {
   toCol: number;
   dir: Direction;
   color: PrimaryColor;
+  terminal?: 'edge' | 'block';
 };
 
 export type ReceptorStatus = {
@@ -288,11 +289,31 @@ export const traceBeams = (grid: GridCell[][]): TraceResult => {
     const nextCol = ray.col + delta.dc;
 
     if (nextRow < 0 || nextRow >= size || nextCol < 0 || nextCol >= size) {
+      segments.push({
+        fromRow: ray.row,
+        fromCol: ray.col,
+        toRow: ray.row,
+        toCol: ray.col,
+        dir: ray.dir,
+        color: ray.color,
+        terminal: 'edge',
+      });
       continue;
     }
 
     const nextCell = grid[nextRow]?.[nextCol];
     if (!nextCell || nextCell.kind === 'block' || nextCell.kind === 'emitter') {
+      if (nextCell && nextCell.kind === 'block') {
+        segments.push({
+          fromRow: ray.row,
+          fromCol: ray.col,
+          toRow: ray.row,
+          toCol: ray.col,
+          dir: ray.dir,
+          color: ray.color,
+          terminal: 'block',
+        });
+      }
       continue;
     }
 
@@ -536,7 +557,7 @@ const synthesizeVerifiedBoard = (
 
   const rng = createRng((puzzleNumber * 2654435761) ^ 0x9e3779b9);
 
-  for (let attempt = 0; attempt < 350; attempt++) {
+  for (let attempt = 0; attempt < 450; attempt++) {
     const grid = makeEmptyGrid(size);
     const occupied = new Set<string>();
 
@@ -695,9 +716,24 @@ const synthesizeVerifiedBoard = (
       }
     }
 
-    // Scramble a subset of rotatables and compute exact minimum flips via BFS/exhaustive solver
+    // Prune dead mirrors/splitters that are never touched by any beam in the solved circuit
+    const activeRotatables: RotatablePos[] = [];
+    for (const pos of placedRotatables) {
+      const litMask = solvedTrace.cellColors[pos.row]?.[pos.col] ?? 0;
+      if (litMask === 0) {
+        const rowCells = grid[pos.row];
+        if (rowCells) {
+          rowCells[pos.col] = { kind: 'empty', row: pos.row, col: pos.col };
+        }
+      } else {
+        activeRotatables.push(pos);
+      }
+    }
+    if (activeRotatables.length < desiredMinPar) continue;
+
+    // Scramble a subset of active rotatables and compute exact minimum flips via exhaustive solver
     const scrambled = cloneGrid(grid);
-    const flipIndices = placedRotatables.map((_, idx) => idx);
+    const flipIndices = activeRotatables.map((_, idx) => idx);
     for (let i = flipIndices.length - 1; i > 0; i--) {
       const j = pickInt(rng, i + 1);
       const a = flipIndices[i];
@@ -708,13 +744,13 @@ const synthesizeVerifiedBoard = (
       }
     }
     const flipsToScramble = Math.min(
-      placedRotatables.length,
+      activeRotatables.length,
       desiredMinPar + 2
     );
     for (let k = 0; k < flipsToScramble; k++) {
       const idx = flipIndices[k];
       if (idx === undefined) continue;
-      const pos = placedRotatables[idx];
+      const pos = activeRotatables[idx];
       if (!pos) continue;
       const cell = scrambled[pos.row]?.[pos.col];
       if (cell && (cell.kind === 'mirror' || cell.kind === 'splitter')) {
@@ -722,13 +758,42 @@ const synthesizeVerifiedBoard = (
       }
     }
 
-    if (traceBeams(scrambled).isSolved) continue;
+    const scrambledTrace = traceBeams(scrambled);
+    if (scrambledTrace.isSolved) continue;
 
     const solved = solveMinimumFlips(scrambled);
     if (!solved) continue;
     if (solved.minFlips < desiredMinPar || solved.minFlips > desiredMaxPar) {
       continue;
     }
+
+    // Ensure at least one misaligned mirror is currently hit by a live beam so first tap gives instant feedback
+    const openingHint = getHintCell(scrambled, solved.solutionOrientations);
+    if (
+      !openingHint ||
+      (scrambledTrace.cellColors[openingHint.row]?.[openingHint.col] ?? 0) === 0
+    ) {
+      continue;
+    }
+
+    // Ensure every remaining mirror/splitter is actively lit in the optimal solution
+    const optimalGrid = cloneGrid(scrambled);
+    for (const pos of activeRotatables) {
+      const targetOrient = solved.solutionOrientations[cellKey(pos.row, pos.col)];
+      const cell = optimalGrid[pos.row]?.[pos.col];
+      if (
+        targetOrient !== undefined &&
+        cell &&
+        (cell.kind === 'mirror' || cell.kind === 'splitter')
+      ) {
+        cell.orientation = targetOrient;
+      }
+    }
+    const optimalTrace = traceBeams(optimalGrid);
+    const hasUnusedInOptimal = activeRotatables.some(
+      (pos) => (optimalTrace.cellColors[pos.row]?.[pos.col] ?? 0) === 0
+    );
+    if (hasUnusedInOptimal) continue;
 
     const title =
       DAILY_TITLES[(puzzleNumber - 1) % DAILY_TITLES.length] ?? 'Prism Relay';
@@ -821,6 +886,11 @@ export const getHintCell = (
   currentGrid: GridCell[][],
   solutionOrientations: Record<string, MirrorOrientation>
 ): { row: number; col: number } | null => {
+  const live = solveMinimumFlips(currentGrid);
+  const targetMap = live?.solutionOrientations ?? solutionOrientations;
+  const currentTrace = traceBeams(currentGrid);
+
+  let fallback: { row: number; col: number } | null = null;
   for (let r = 0; r < currentGrid.length; r++) {
     const rowCells = currentGrid[r];
     if (!rowCells) continue;
@@ -829,13 +899,18 @@ export const getHintCell = (
       if (!cell || (cell.kind !== 'mirror' && cell.kind !== 'splitter')) {
         continue;
       }
-      const target = solutionOrientations[cellKey(r, c)];
+      const target = targetMap[cellKey(r, c)];
       if (target !== undefined && cell.orientation !== target) {
-        return { row: r, col: c };
+        if ((currentTrace.cellColors[r]?.[c] ?? 0) !== 0) {
+          return { row: r, col: c };
+        }
+        if (!fallback) {
+          fallback = { row: r, col: c };
+        }
       }
     }
   }
-  return null;
+  return fallback;
 };
 
 export const formatDuration = (ms: number): string => {

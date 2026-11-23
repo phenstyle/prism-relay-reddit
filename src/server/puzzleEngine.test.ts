@@ -41,6 +41,13 @@ void describe('Prism Relay puzzleEngine', () => {
         `Puzzle #${num} must require color mixing`
       );
 
+      const openingHint = getHintCell(puzzle.grid, puzzle.solutionOrientations);
+      assert.ok(openingHint, `Puzzle #${num} must provide an opening hint`);
+      assert.ok(
+        (initialTrace.cellColors[openingHint.row]?.[openingHint.col] ?? 0) !== 0,
+        `Puzzle #${num} opening hint must be actively hit by a beam`
+      );
+
       let working = cloneGrid(puzzle.grid);
       let flipsApplied = 0;
       for (let r = 0; r < working.length; r++) {
@@ -66,11 +73,23 @@ void describe('Prism Relay puzzleEngine', () => {
         puzzle.par,
         `Puzzle #${num} solution should match exact par (${puzzle.par})`
       );
+      const solvedTrace = traceBeams(working);
       assert.equal(
-        traceBeams(working).isSolved,
+        solvedTrace.isSolved,
         true,
         `Puzzle #${num} must be solved after applying solution flips`
       );
+      for (let r = 0; r < working.length; r++) {
+        for (let c = 0; c < working.length; c++) {
+          const cell = working[r]?.[c];
+          if (cell && (cell.kind === 'mirror' || cell.kind === 'splitter')) {
+            assert.ok(
+              (solvedTrace.cellColors[r]?.[c] ?? 0) !== 0,
+              `Puzzle #${num} tile (${r},${c}) should not be an unused dead mirror`
+            );
+          }
+        }
+      }
     }
   });
 

@@ -30,11 +30,27 @@ const dirArrowPoints = (dir: Direction, cx: number, cy: number): string => {
   return `${cx - 26},${cy} ${cx - 8},${cy - 12} ${cx - 8},${cy + 12}`;
 };
 
+const DIR_STEP: Record<Direction, { dx: number; dy: number }> = {
+  N: { dx: 0, dy: -1 },
+  E: { dx: 1, dy: 0 },
+  S: { dx: 0, dy: 1 },
+  W: { dx: -1, dy: 0 },
+};
+
+const PRIMARY_BITS: readonly (1 | 2 | 4)[] = [1, 2, 4];
+
 const buildBeamStrokeColor = (
   seg: BeamSegment,
   cellColors: TraceResult['cellColors']
 ): string => {
   const fromMask = cellColors[seg.fromRow]?.[seg.fromCol] ?? seg.color;
+  if (seg.terminal) {
+    if (fromMask === 3) return COLOR_META[3].hex;
+    if (fromMask === 5) return COLOR_META[5].hex;
+    if (fromMask === 6) return COLOR_META[6].hex;
+    if (fromMask === 7) return COLOR_META[7].hex;
+    return COLOR_META[seg.color].hex;
+  }
   const toMask = cellColors[seg.toRow]?.[seg.toCol] ?? seg.color;
   const shared = fromMask & toMask;
   if (shared === 3) return COLOR_META[3].hex;
@@ -171,8 +187,19 @@ export const OpticalBoard = ({
           {trace.segments.map((seg, idx) => {
             const x1 = centerOf(seg.fromCol);
             const y1 = centerOf(seg.fromRow);
-            const x2 = centerOf(seg.toCol);
-            const y2 = centerOf(seg.toRow);
+            const step = DIR_STEP[seg.dir];
+            const x2 =
+              seg.terminal === 'edge'
+                ? x1 + step.dx * 48
+                : seg.terminal === 'block'
+                  ? x1 + step.dx * 67
+                  : centerOf(seg.toCol);
+            const y2 =
+              seg.terminal === 'edge'
+                ? y1 + step.dy * 48
+                : seg.terminal === 'block'
+                  ? y1 + step.dy * 67
+                  : centerOf(seg.toRow);
             const colorHex = buildBeamStrokeColor(seg, trace.cellColors);
             return (
               <g key={`seg-${idx}`}>
@@ -261,6 +288,11 @@ export const OpticalBoard = ({
               const meta = COLOR_META[cell.targetColor];
               const matched = status?.matched === true;
               const overmixed = status?.overmixed === true;
+              const received = status?.receivedColor ?? 0;
+              const neededPrimaries = PRIMARY_BITS.filter(
+                (bit) => (cell.targetColor & bit) !== 0
+              );
+              const isMixedTarget = neededPrimaries.length > 1;
               return (
                 <g key={`el-${r}-${c}`}>
                   {matched ? (
@@ -296,6 +328,28 @@ export const OpticalBoard = ({
                   >
                     {meta.symbol}
                   </text>
+                  {isMixedTarget && !matched ? (
+                    <g>
+                      {neededPrimaries.map((bit, i) => {
+                        const spacing = 14;
+                        const offset =
+                          (i - (neededPrimaries.length - 1) / 2) * spacing;
+                        const hasBit = (received & bit) !== 0;
+                        const bitHex = COLOR_META[bit].hex;
+                        return (
+                          <circle
+                            key={bit}
+                            cx={cx + offset}
+                            cy={cy + 34}
+                            r={4.5}
+                            fill={hasBit ? bitHex : '#141210'}
+                            stroke={bitHex}
+                            strokeWidth={2}
+                          />
+                        );
+                      })}
+                    </g>
+                  ) : null}
                   {matched ? (
                     <circle
                       cx={cx + 24}

@@ -101,6 +101,7 @@ export const App = () => {
   const startTimeRef = useRef<number>(0);
   const solvedSubmittedRef = useRef<boolean>(false);
   const prevMatchedCountRef = useRef<number>(0);
+  const victoryTimerRef = useRef<number | null>(null);
 
   const trace = useMemo(() => traceBeams(grid), [grid]);
   const matchedCount = useMemo(
@@ -109,6 +110,10 @@ export const App = () => {
   );
 
   const resetWithGrid = (nextGrid: GridCell[][]) => {
+    if (victoryTimerRef.current !== null) {
+      window.clearTimeout(victoryTimerRef.current);
+      victoryTimerRef.current = null;
+    }
     setGrid(cloneGrid(nextGrid));
     setHistory([]);
     setMoves(0);
@@ -240,8 +245,14 @@ export const App = () => {
       const finalMs = Math.max(500, Date.now() - startMs);
       setElapsedMs(finalMs);
       playSolveChord(muted);
-      setShowVictory(true);
       submitBoardSolve(nextMoves, finalMs);
+      if (victoryTimerRef.current !== null) {
+        window.clearTimeout(victoryTimerRef.current);
+      }
+      victoryTimerRef.current = window.setTimeout(() => {
+        setShowVictory(true);
+        victoryTimerRef.current = null;
+      }, 650);
     } else if (nextMatched > prevMatchedCountRef.current) {
       playCrystalLock(muted);
     } else {
@@ -384,10 +395,10 @@ export const App = () => {
                   key={mask}
                   className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-white/90 border border-stone-300 shadow-xs"
                 >
+                  <span className="text-stone-600 font-medium">{recipe} =</span>
                   <span style={{ color: meta.hex }} className="font-bold">
-                    {meta.symbol}
+                    {meta.symbol} {meta.name}
                   </span>
-                  <span className="text-stone-600 font-medium">{recipe}</span>
                 </span>
               );
             })}
