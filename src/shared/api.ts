@@ -1,3 +1,5 @@
+import type { GridCell, MirrorOrientation } from './puzzleEngine';
+
 export type LeaderboardEntry = {
   username: string;
   moves: number;
@@ -9,6 +11,16 @@ export type PlayerDailyRecord = {
   moves: number;
   timeMs: number;
   solvedAt: string;
+};
+
+export type CustomPuzzlePayload = {
+  id: string;
+  title: string;
+  author: string;
+  par: number;
+  grid: GridCell[][];
+  solutionOrientations: Record<string, MirrorOrientation>;
+  createdAt: string;
 };
 
 export type DailyStats = {
@@ -30,10 +42,12 @@ export type InitResponse = {
   bestStreak: number;
   playerRecord: PlayerDailyRecord | null;
   stats: DailyStats;
+  customPuzzle: CustomPuzzlePayload | null;
 };
 
 export type SubmitSolveRequest = {
   dateKey: string;
+  boardKey?: string;
   moves: number;
   timeMs: number;
   par: number;
@@ -48,4 +62,17 @@ export type SubmitSolveResponse = {
   percentile: number;
   playerRecord: PlayerDailyRecord;
   stats: DailyStats;
+};
+
+export type CreateCustomPuzzleRequest = {
+  title: string;
+  grid: GridCell[][];
+};
+
+export type CreateCustomPuzzleResponse = {
+  type: 'custom-created';
+  postId: string;
+  postUrl: string;
+  par: number;
+  title: string;
 };

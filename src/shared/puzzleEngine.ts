@@ -845,6 +845,108 @@ export const formatDuration = (ms: number): string => {
   return `${mins}:${String(secs).padStart(2, '0')}`;
 };
 
+export type CustomValidationResult =
+  | {
+      valid: true;
+      par: number;
+      solutionOrientations: Record<string, MirrorOrientation>;
+    }
+  | {
+      valid: false;
+      reason: string;
+    };
+
+export const validateCustomGrid = (
+  grid: GridCell[][]
+): CustomValidationResult => {
+  if (!Array.isArray(grid) || grid.length !== GRID_SIZE) {
+    return { valid: false, reason: 'Board must be 6×6.' };
+  }
+  let emitters = 0;
+  let receptors = 0;
+  let rotatables = 0;
+
+  for (let r = 0; r < GRID_SIZE; r++) {
+    const row = grid[r];
+    if (!Array.isArray(row) || row.length !== GRID_SIZE) {
+      return { valid: false, reason: 'Board must be 6×6.' };
+    }
+    for (let c = 0; c < GRID_SIZE; c++) {
+      const cell = row[c];
+      if (!cell) return { valid: false, reason: 'Invalid cell.' };
+      if (cell.kind === 'emitter') emitters += 1;
+      if (cell.kind === 'receptor') receptors += 1;
+      if (cell.kind === 'mirror' || cell.kind === 'splitter') rotatables += 1;
+    }
+  }
+
+  if (emitters < 1) {
+    return { valid: false, reason: 'Place at least 1 emitter.' };
+  }
+  if (receptors < 1) {
+    return { valid: false, reason: 'Place at least 1 crystal receptor.' };
+  }
+  if (rotatables < 1) {
+    return { valid: false, reason: 'Place at least 1 mirror or splitter.' };
+  }
+  if (rotatables > 10) {
+    return { valid: false, reason: 'Use at most 10 mirrors/splitters.' };
+  }
+
+  const initial = traceBeams(grid);
+  if (initial.isSolved) {
+    return {
+      valid: false,
+      reason: 'Already solved — tap Scramble or flip a mirror!',
+    };
+  }
+
+  const solved = solveMinimumFlips(grid);
+  if (!solved || solved.minFlips < 1) {
+    return {
+      valid: false,
+      reason: 'No valid mirror combination lights every crystal.',
+    };
+  }
+
+  return {
+    valid: true,
+    par: solved.minFlips,
+    solutionOrientations: solved.solutionOrientations,
+  };
+};
+
+export const autoScrambleCustomGrid = (
+  grid: GridCell[][]
+): { grid: GridCell[][]; par: number } | null => {
+  const rotatables = collectRotatables(grid);
+  if (rotatables.length === 0 || rotatables.length > 10) return null;
+
+  // Verify board has at least one solvable orientation first
+  const baseline = solveMinimumFlips(grid);
+  if (!baseline) return null;
+
+  // Pick a scrambled mask maximizing par (up to 5 moves) so the published board is genuinely fun
+  let bestGrid: GridCell[][] | null = null;
+  let bestPar = 0;
+  const totalStates = 1 << rotatables.length;
+  const step = Math.max(1, Math.floor(totalStates / 64));
+
+  for (let mask = 0; mask < totalStates; mask += step) {
+    const candidate = applyBitmask(grid, rotatables, mask);
+    if (traceBeams(candidate).isSolved) continue;
+    const check = solveMinimumFlips(candidate);
+    if (!check) continue;
+    if (check.minFlips > bestPar && check.minFlips <= 6) {
+      bestPar = check.minFlips;
+      bestGrid = candidate;
+    }
+  }
+
+  if (!bestGrid || bestPar < 1) return null;
+  return { grid: bestGrid, par: bestPar };
+};
+
 export const buildSpoilerFreeShareText = (params: {
   puzzleNumber: number;
   title: string;
@@ -853,6 +955,7 @@ export const buildSpoilerFreeShareText = (params: {
   timeMs: number;
   streak: number;
   grid: GridCell[][];
+  author?: string | undefined;
 }): string => {
   const trace = traceBeams(params.grid);
   const parBadge =
@@ -880,10 +983,14 @@ export const buildSpoilerFreeShareText = (params: {
   }
 
   const streakPart = params.streak > 1 ? ` · 🔥 ${params.streak}-day streak` : '';
+  const heading = params.author
+    ? `Prism Relay (Community by u/${params.author}) — ${params.title}`
+    : `Prism Relay #${params.puzzleNumber} — ${params.title}`;
   return [
-    `Prism Relay #${params.puzzleNumber} — ${params.title}`,
+    heading,
     `${parBadge} · ${params.moves} moves (Par ${params.par}) · ⏱️ ${formatDuration(params.timeMs)}${streakPart}`,
     '',
     ...rows,
   ].join('\n');
 };
+

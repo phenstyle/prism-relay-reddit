@@ -1,6 +1,9 @@
 import { Hono } from 'hono';
 import { context, redis, reddit } from '@devvit/web/server';
 import type {
+  CreateCustomPuzzleRequest,
+  CreateCustomPuzzleResponse,
+  CustomPuzzlePayload,
   DailyStats,
   InitResponse,
   LeaderboardEntry,
@@ -11,6 +14,7 @@ import type {
 import {
   formatDateKeyUtc,
   getPuzzleNumberForDateKey,
+  validateCustomGrid,
 } from '../../shared/puzzleEngine';
 
 type ErrorResponse = {
@@ -28,7 +32,8 @@ const SCORE_MOVE_WEIGHT = 1_000_000;
 const MAX_TRACKED_TIME_MS = 999_999;
 
 const encodeScore = (moves: number, timeMs: number): number =>
-  moves * SCORE_MOVE_WEIGHT + Math.min(Math.max(0, Math.round(timeMs)), MAX_TRACKED_TIME_MS);
+  moves * SCORE_MOVE_WEIGHT +
+  Math.min(Math.max(0, Math.round(timeMs)), MAX_TRACKED_TIME_MS);
 
 const decodeScore = (score: number): { moves: number; timeMs: number } => {
   const moves = Math.floor(score / SCORE_MOVE_WEIGHT);
@@ -54,10 +59,13 @@ const parseJsonObject = <T>(raw: string | undefined): T | null => {
   }
 };
 
-const loadDailyStats = async (dateKey: string): Promise<DailyStats> => {
-  const lbKey = `pr:lb:${dateKey}`;
-  const distKey = `pr:dist:${dateKey}`;
-  const parKey = `pr:par:${dateKey}`;
+const loadBoardStats = async (
+  boardKey: string,
+  dateKey: string
+): Promise<DailyStats> => {
+  const lbKey = `pr:lb:${boardKey}`;
+  const distKey = `pr:dist:${boardKey}`;
+  const parKey = `pr:par:${boardKey}`;
 
   const [topEntries, totalSolvers, rawDist, rawParCount] = await Promise.all([
     redis.zRange(lbKey, 0, 7, { by: 'rank' }),
@@ -109,15 +117,21 @@ api.get('/init', async (c) => {
 
   try {
     const dateKey = formatDateKeyUtc(new Date());
-    const username = (await reddit.getCurrentUsername()) ?? 'guest';
+    const [usernameRaw, rawCustom] = await Promise.all([
+      reddit.getCurrentUsername(),
+      redis.get(`pr:custom:${postId}`),
+    ]);
+    const username = usernameRaw ?? 'guest';
+    const customPuzzle = parseJsonObject<CustomPuzzlePayload>(rawCustom);
+    const boardKey = customPuzzle ? `custom:${postId}` : dateKey;
 
-    const playerRecordKey = `pr:rec:${dateKey}:${username}`;
+    const playerRecordKey = `pr:rec:${boardKey}:${username}`;
     const streakKey = `pr:streak:${username}`;
 
     const [rawRecord, rawStreak, stats] = await Promise.all([
       redis.get(playerRecordKey),
       redis.get(streakKey),
-      loadDailyStats(dateKey),
+      loadBoardStats(boardKey, dateKey),
     ]);
 
     const playerRecord = parseJsonObject<PlayerDailyRecord>(rawRecord);
@@ -141,6 +155,7 @@ api.get('/init', async (c) => {
       bestStreak: streakData?.bestStreak ?? activeStreak,
       playerRecord,
       stats,
+      customPuzzle,
     });
   } catch (error) {
     console.error(`Prism Relay init error for post ${postId}:`, error);
@@ -170,6 +185,12 @@ api.post('/submit', async (c) => {
       typeof body.dateKey === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(body.dateKey)
         ? body.dateKey
         : formatDateKeyUtc(new Date());
+    const boardKey =
+      typeof body.boardKey === 'string' && body.boardKey.startsWith('custom:')
+        ? body.boardKey
+        : dateKey;
+    const isCustomBoard = boardKey.startsWith('custom:');
+
     const moves = Math.max(1, Math.min(999, Math.round(Number(body.moves) || 1)));
     const timeMs = Math.max(
       100,
@@ -178,11 +199,11 @@ api.post('/submit', async (c) => {
     const par = Math.max(1, Math.min(50, Math.round(Number(body.par) || 3)));
 
     const username = (await reddit.getCurrentUsername()) ?? 'guest';
-    const playerRecordKey = `pr:rec:${dateKey}:${username}`;
+    const playerRecordKey = `pr:rec:${boardKey}:${username}`;
     const streakKey = `pr:streak:${username}`;
-    const lbKey = `pr:lb:${dateKey}`;
-    const distKey = `pr:dist:${dateKey}`;
-    const parKey = `pr:par:${dateKey}`;
+    const lbKey = `pr:lb:${boardKey}`;
+    const distKey = `pr:dist:${boardKey}`;
+    const parKey = `pr:par:${boardKey}`;
 
     const [rawExisting, rawStreak] = await Promise.all([
       redis.get(playerRecordKey),
@@ -194,7 +215,7 @@ api.post('/submit', async (c) => {
     const existingScore = existing
       ? encodeScore(existing.moves, existing.timeMs)
       : Number.POSITIVE_INFINITY;
-    const isFirstSolveToday = !existing;
+    const isFirstSolve = !existing;
     const isNewBest = newScore < existingScore;
 
     const finalRecord: PlayerDailyRecord = isNewBest
@@ -208,7 +229,7 @@ api.post('/submit', async (c) => {
       ]);
     }
 
-    if (isFirstSolveToday) {
+    if (isFirstSolve) {
       const bucket = moves <= par ? 'par' : moves <= par + 2 ? 'near' : 'over';
       await redis.hIncrBy(distKey, bucket, 1);
       if (moves <= par) {
@@ -216,13 +237,13 @@ api.post('/submit', async (c) => {
       }
     }
 
-    // Update daily streak once per day
+    // Update daily streak on daily solves
     const prevStreak = parseJsonObject<StreakRecord>(rawStreak);
     const yesterdayKey = getYesterdayDateKey(dateKey);
     let nextStreak = prevStreak?.streak ?? 0;
     let nextBest = prevStreak?.bestStreak ?? 0;
 
-    if (!prevStreak || prevStreak.lastSolvedDate !== dateKey) {
+    if (!isCustomBoard && (!prevStreak || prevStreak.lastSolvedDate !== dateKey)) {
       nextStreak =
         prevStreak && prevStreak.lastSolvedDate === yesterdayKey
           ? prevStreak.streak + 1
@@ -239,7 +260,7 @@ api.post('/submit', async (c) => {
     }
 
     const [stats, rank] = await Promise.all([
-      loadDailyStats(dateKey),
+      loadBoardStats(boardKey, dateKey),
       redis.zRank(lbKey, username),
     ]);
 
@@ -267,6 +288,68 @@ api.post('/submit', async (c) => {
         status: 'error',
         message:
           error instanceof Error ? error.message : 'Failed to record score',
+      },
+      500
+    );
+  }
+});
+
+api.post('/custom-puzzle', async (c) => {
+  const { subredditName } = context;
+  if (!subredditName) {
+    return c.json<ErrorResponse>(
+      { status: 'error', message: 'subredditName is required' },
+      400
+    );
+  }
+
+  try {
+    const body = await c.req.json<CreateCustomPuzzleRequest>();
+    const rawTitle =
+      typeof body.title === 'string' ? body.title.trim() : '';
+    const title = rawTitle.slice(0, 48) || 'Atelier Challenge';
+
+    const validation = validateCustomGrid(body.grid);
+    if (!validation.valid) {
+      return c.json<ErrorResponse>(
+        { status: 'error', message: validation.reason },
+        400
+      );
+    }
+
+    const author = (await reddit.getCurrentUsername()) ?? 'redditor';
+    const post = await reddit.submitCustomPost({
+      title: `Prism Relay [Community]: ${title} — by u/${author} (Par ${validation.par})`,
+    });
+
+    const payload: CustomPuzzlePayload = {
+      id: post.id,
+      title,
+      author,
+      par: validation.par,
+      grid: body.grid,
+      solutionOrientations: validation.solutionOrientations,
+      createdAt: new Date().toISOString(),
+    };
+
+    await redis.set(`pr:custom:${post.id}`, JSON.stringify(payload));
+
+    return c.json<CreateCustomPuzzleResponse>({
+      type: 'custom-created',
+      postId: post.id,
+      postUrl: `https://www.reddit.com/r/${subredditName}/comments/${post.id}`,
+      par: validation.par,
+      title,
+    });
+  } catch (error) {
+    console.error('Prism Relay custom-puzzle error:', error);
+    return c.json<ErrorResponse>(
+      {
+        status: 'error',
+        message:
+          error instanceof Error
+            ? error.message
+            : 'Failed to publish community puzzle',
       },
       500
     );

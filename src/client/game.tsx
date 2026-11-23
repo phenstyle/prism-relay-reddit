@@ -4,12 +4,13 @@ import { StrictMode, useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { showToast } from '@devvit/web/client';
 import type {
+  CustomPuzzlePayload,
   DailyStats,
   InitResponse,
   PlayerDailyRecord,
   SubmitSolveResponse,
 } from '../shared/api';
-import type { GridCell } from '../shared/puzzleEngine';
+import type { GridCell, MirrorOrientation } from '../shared/puzzleEngine';
 import {
   COLOR_META,
   buildSpoilerFreeShareText,
@@ -23,12 +24,29 @@ import {
   traceBeams,
 } from '../shared/puzzleEngine';
 import { OpticalBoard } from './components/OpticalBoard';
+import { PuzzleCreatorModal } from './components/PuzzleCreatorModal';
 import { playCrystalLock, playMirrorClick, playSolveChord } from './sound';
+
+type ActiveBoardMeta = {
+  boardKey: string;
+  puzzleNumber: number;
+  title: string;
+  par: number;
+  initialGrid: GridCell[][];
+  solutionOrientations: Record<string, MirrorOrientation>;
+  author?: string;
+  isDaily: boolean;
+};
 
 export const App = () => {
   const todayFallback = useMemo(() => formatDateKeyUtc(new Date()), []);
   const [todayDateKey, setTodayDateKey] = useState<string>(todayFallback);
   const [activeDateKey, setActiveDateKey] = useState<string>(todayFallback);
+  const [customPuzzle, setCustomPuzzle] = useState<CustomPuzzlePayload | null>(
+    null
+  );
+  const [playingCustom, setPlayingCustom] = useState<boolean>(false);
+
   const [username, setUsername] = useState<string>('player');
   const [streak, setStreak] = useState<number>(0);
   const [bestStreak, setBestStreak] = useState<number>(0);
@@ -38,10 +56,38 @@ export const App = () => {
   );
   const [percentile, setPercentile] = useState<number | null>(null);
 
-  const puzzle = useMemo(() => getDailyPuzzle(activeDateKey), [activeDateKey]);
-  const isDailyMode = activeDateKey === todayDateKey;
+  const dailyPuzzle = useMemo(
+    () => getDailyPuzzle(activeDateKey),
+    [activeDateKey]
+  );
 
-  const [grid, setGrid] = useState<GridCell[][]>(() => cloneGrid(puzzle.grid));
+  const boardMeta: ActiveBoardMeta = useMemo(() => {
+    if (playingCustom && customPuzzle) {
+      return {
+        boardKey: `custom:${customPuzzle.id}`,
+        puzzleNumber: dailyPuzzle.puzzleNumber,
+        title: customPuzzle.title,
+        par: customPuzzle.par,
+        initialGrid: customPuzzle.grid,
+        solutionOrientations: customPuzzle.solutionOrientations,
+        author: customPuzzle.author,
+        isDaily: false,
+      };
+    }
+    return {
+      boardKey: activeDateKey,
+      puzzleNumber: dailyPuzzle.puzzleNumber,
+      title: dailyPuzzle.title,
+      par: dailyPuzzle.par,
+      initialGrid: dailyPuzzle.grid,
+      solutionOrientations: dailyPuzzle.solutionOrientations,
+      isDaily: activeDateKey === todayDateKey,
+    };
+  }, [playingCustom, customPuzzle, dailyPuzzle, activeDateKey, todayDateKey]);
+
+  const [grid, setGrid] = useState<GridCell[][]>(() =>
+    cloneGrid(dailyPuzzle.grid)
+  );
   const [history, setHistory] = useState<GridCell[][][]>([]);
   const [moves, setMoves] = useState<number>(0);
   const [elapsedMs, setElapsedMs] = useState<number>(0);
@@ -50,6 +96,7 @@ export const App = () => {
     null
   );
   const [showVictory, setShowVictory] = useState<boolean>(false);
+  const [showCreator, setShowCreator] = useState<boolean>(false);
 
   const startTimeRef = useRef<number>(0);
   const solvedSubmittedRef = useRef<boolean>(false);
@@ -61,10 +108,8 @@ export const App = () => {
     [trace.receptors]
   );
 
-  const switchToDateKey = (nextDateKey: string) => {
-    const nextPuzzle = getDailyPuzzle(nextDateKey);
-    setActiveDateKey(nextDateKey);
-    setGrid(cloneGrid(nextPuzzle.grid));
+  const resetWithGrid = (nextGrid: GridCell[][]) => {
+    setGrid(cloneGrid(nextGrid));
     setHistory([]);
     setMoves(0);
     setElapsedMs(0);
@@ -72,12 +117,19 @@ export const App = () => {
     setShowVictory(false);
     startTimeRef.current = Date.now();
     solvedSubmittedRef.current = false;
-    prevMatchedCountRef.current = traceBeams(nextPuzzle.grid).receptors.filter(
+    prevMatchedCountRef.current = traceBeams(nextGrid).receptors.filter(
       (r) => r.matched
     ).length;
   };
 
-  // Load Reddit user & community Redis stats
+  const switchToDateKey = (nextDateKey: string) => {
+    const nextPuzzle = getDailyPuzzle(nextDateKey);
+    setPlayingCustom(false);
+    setActiveDateKey(nextDateKey);
+    resetWithGrid(nextPuzzle.grid);
+  };
+
+  // Load Reddit user, custom post payload (if community relay), & community Redis stats
   useEffect(() => {
     startTimeRef.current = Date.now();
     let mounted = true;
@@ -91,14 +143,15 @@ export const App = () => {
         setBestStreak(data.bestStreak);
         setStats(data.stats);
         setPlayerRecord(data.playerRecord);
-        if (data.dateKey !== todayFallback) {
+
+        if (data.customPuzzle) {
+          setCustomPuzzle(data.customPuzzle);
+          setPlayingCustom(true);
+          resetWithGrid(data.customPuzzle.grid);
+        } else if (data.dateKey !== todayFallback) {
           const syncedPuzzle = getDailyPuzzle(data.dateKey);
           setActiveDateKey(data.dateKey);
-          setGrid(cloneGrid(syncedPuzzle.grid));
-          setHistory([]);
-          setMoves(0);
-          setElapsedMs(0);
-          startTimeRef.current = Date.now();
+          resetWithGrid(syncedPuzzle.grid);
         }
       })
       .catch(() => {
@@ -111,7 +164,7 @@ export const App = () => {
 
   // Tick timer while unsolved
   useEffect(() => {
-    if (trace.isSolved) return;
+    if (trace.isSolved || showCreator) return;
     if (startTimeRef.current === 0) {
       startTimeRef.current = Date.now();
     }
@@ -119,18 +172,19 @@ export const App = () => {
       setElapsedMs(Date.now() - startTimeRef.current);
     }, 250);
     return () => window.clearInterval(id);
-  }, [trace.isSolved, activeDateKey]);
+  }, [trace.isSolved, showCreator, boardMeta.boardKey]);
 
-  const submitDailySolve = (finalMoves: number, finalMs: number) => {
-    if (!isDailyMode) return;
+  const submitBoardSolve = (finalMoves: number, finalMs: number) => {
+    if (!boardMeta.isDaily && !playingCustom) return;
     fetch('/api/submit', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        dateKey: activeDateKey,
+        dateKey: todayDateKey,
+        boardKey: boardMeta.boardKey,
         moves: Math.max(1, finalMoves),
         timeMs: finalMs,
-        par: puzzle.par,
+        par: boardMeta.par,
       }),
     })
       .then((res) => (res.ok ? res.json() : null))
@@ -150,8 +204,8 @@ export const App = () => {
   // Subtle first-move onboarding cue pointing to one misaligned mirror
   const onboardingCell = useMemo(() => {
     if (moves > 0 || trace.isSolved) return null;
-    return getHintCell(grid, puzzle.solutionOrientations);
-  }, [moves, trace.isSolved, grid, puzzle.solutionOrientations]);
+    return getHintCell(grid, boardMeta.solutionOrientations);
+  }, [moves, trace.isSolved, grid, boardMeta.solutionOrientations]);
 
   // Show only the mixing recipes relevant to this board's mixed receptors
   const activeRecipes = useMemo(() => {
@@ -187,7 +241,7 @@ export const App = () => {
       setElapsedMs(finalMs);
       playSolveChord(muted);
       setShowVictory(true);
-      submitDailySolve(nextMoves, finalMs);
+      submitBoardSolve(nextMoves, finalMs);
     } else if (nextMatched > prevMatchedCountRef.current) {
       playCrystalLock(muted);
     } else {
@@ -210,27 +264,28 @@ export const App = () => {
   };
 
   const handleReset = () => {
-    switchToDateKey(activeDateKey);
+    resetWithGrid(boardMeta.initialGrid);
   };
 
   const handleHint = () => {
     if (trace.isSolved) return;
-    const cell = getHintCell(grid, puzzle.solutionOrientations);
+    const cell = getHintCell(grid, boardMeta.solutionOrientations);
     if (cell) {
       setHintCell(cell);
-      showToast('Highlighted a mirror to rotate!');
+      showToast('Highlighted an optical tile to rotate.');
     }
   };
 
   const handleCopyShare = async () => {
     const shareText = buildSpoilerFreeShareText({
-      puzzleNumber: puzzle.puzzleNumber,
-      title: puzzle.title,
+      puzzleNumber: boardMeta.puzzleNumber,
+      title: boardMeta.title,
       moves: Math.max(1, moves),
-      par: puzzle.par,
+      par: boardMeta.par,
       timeMs: elapsedMs,
       streak,
       grid,
+      author: boardMeta.author,
     });
     try {
       await navigator.clipboard.writeText(shareText);
@@ -241,7 +296,7 @@ export const App = () => {
   };
 
   const handleSwitchPractice = () => {
-    const nextNum = puzzle.puzzleNumber > 1 ? puzzle.puzzleNumber - 1 : 24;
+    const nextNum = boardMeta.puzzleNumber > 1 ? boardMeta.puzzleNumber - 1 : 24;
     switchToDateKey(getDateKeyForPuzzleNumber(nextNum));
   };
 
@@ -257,45 +312,51 @@ export const App = () => {
   );
 
   return (
-    <div className="h-dvh w-full bg-[#0b101b] text-slate-100 flex flex-col justify-between overflow-hidden px-3 py-2.5 sm:px-5 sm:py-3.5">
-      {/* Top HUD */}
-      <header className="w-full max-w-lg mx-auto flex items-center justify-between gap-2">
+    <div className="h-dvh w-full atelier-paper text-stone-900 flex flex-col justify-between overflow-hidden px-3 py-2.5 sm:px-5 sm:py-3.5">
+      {/* Editorial Header */}
+      <header className="w-full max-w-lg mx-auto flex items-center justify-between gap-2 border-b border-stone-300/80 pb-2">
         <div className="min-w-0">
-          <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-amber-300">
-            <span>{isDailyMode ? 'Daily' : 'Archive'}</span>
-            <span>·</span>
-            <span>#{puzzle.puzzleNumber}</span>
+          <div className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-[0.16em] text-[#8c6220]">
+            <span>
+              {boardMeta.author
+                ? `Community · u/${boardMeta.author}`
+                : boardMeta.isDaily
+                  ? `Daily · #${boardMeta.puzzleNumber}`
+                  : `Archive · #${boardMeta.puzzleNumber}`}
+            </span>
             {streak > 0 ? (
-              <span className="ml-1 text-orange-300">🔥 {streak}</span>
+              <span className="ml-1 px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-900 border border-amber-300">
+                🔥 {streak}
+              </span>
             ) : null}
           </div>
-          <h1 className="text-base sm:text-lg font-bold truncate text-white">
-            {puzzle.title}
+          <h1 className="font-editorial text-lg sm:text-xl font-bold truncate text-stone-900 leading-tight">
+            {boardMeta.title}
           </h1>
         </div>
 
-        <div className="flex items-center gap-1.5 sm:gap-2">
-          <div className="px-2.5 py-1 rounded-lg bg-slate-900 border border-slate-800 text-xs font-mono">
-            <span className="text-slate-400">Moves </span>
+        <div className="flex items-center gap-1.5">
+          <div className="px-2.5 py-1 rounded-lg bg-white/90 border border-stone-300 text-xs font-mono shadow-xs">
+            <span className="text-stone-500">Moves </span>
             <span
               className={
-                moves <= puzzle.par
-                  ? 'text-emerald-300 font-bold'
-                  : 'text-amber-300 font-bold'
+                moves <= boardMeta.par
+                  ? 'text-emerald-700 font-bold'
+                  : 'text-amber-700 font-bold'
               }
             >
               {moves}
             </span>
-            <span className="text-slate-500">/{puzzle.par}</span>
+            <span className="text-stone-400">/{boardMeta.par}</span>
           </div>
-          <div className="px-2 py-1 rounded-lg bg-slate-900 border border-slate-800 text-xs font-mono text-slate-300">
+          <div className="px-2 py-1 rounded-lg bg-white/90 border border-stone-300 text-xs font-mono text-stone-700 shadow-xs">
             {formatDuration(elapsedMs)}
           </div>
           <button
             type="button"
             onClick={() => setMuted((m) => !m)}
             aria-label={muted ? 'Unmute sound' : 'Mute sound'}
-            className="w-8 h-8 rounded-lg bg-slate-900 border border-slate-800 text-xs flex items-center justify-center cursor-pointer hover:bg-slate-800"
+            className="w-8 h-8 rounded-lg bg-white/90 border border-stone-300 text-xs flex items-center justify-center cursor-pointer hover:bg-white shadow-xs"
           >
             {muted ? '🔇' : '🔊'}
           </button>
@@ -313,30 +374,30 @@ export const App = () => {
           onTileTap={handleTileTap}
         />
 
-        {/* Compact Color Mix Key & Crystal Progress */}
-        <div className="w-full max-w-[420px] flex flex-wrap items-center justify-between gap-2 px-1 text-[11px] text-slate-300">
+        {/* Compact Color Mix Key & Crystal Counter */}
+        <div className="w-full max-w-[412px] flex flex-wrap items-center justify-between gap-2 px-1 text-[11px] text-stone-700">
           <div className="flex flex-wrap items-center gap-1.5">
             {activeRecipes.map(({ mask, recipe }) => {
               const meta = COLOR_META[mask];
               return (
                 <span
                   key={mask}
-                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-slate-900 border border-slate-800"
+                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-white/90 border border-stone-300 shadow-xs"
                 >
                   <span style={{ color: meta.hex }} className="font-bold">
                     {meta.symbol}
                   </span>
-                  <span className="text-slate-400">{recipe}</span>
+                  <span className="text-stone-600 font-medium">{recipe}</span>
                 </span>
               );
             })}
           </div>
 
-          <div className="font-semibold text-slate-200">
+          <div className="font-semibold text-stone-800">
             Crystals:{' '}
             <span
               className={
-                trace.isSolved ? 'text-emerald-400' : 'text-amber-300'
+                trace.isSolved ? 'text-emerald-700' : 'text-[#8c6220]'
               }
             >
               {matchedCount}/{trace.receptors.length}
@@ -345,21 +406,21 @@ export const App = () => {
         </div>
       </main>
 
-      {/* Bottom Action Bar */}
-      <footer className="w-full max-w-[420px] mx-auto flex items-center justify-between gap-2 pt-1">
+      {/* Bottom Craft Control Dock */}
+      <footer className="w-full max-w-[412px] mx-auto flex items-center justify-between gap-1.5 pt-1">
         <div className="flex items-center gap-1.5">
           <button
             type="button"
             onClick={handleUndo}
             disabled={history.length === 0 || trace.isSolved}
-            className="px-3 py-2 rounded-xl text-xs font-semibold bg-slate-900 border border-slate-800 text-slate-200 disabled:opacity-40 cursor-pointer hover:bg-slate-800"
+            className="px-2.5 py-2 rounded-xl text-xs font-semibold bg-white/90 border border-stone-300 text-stone-800 disabled:opacity-40 cursor-pointer hover:bg-white shadow-xs"
           >
             Undo
           </button>
           <button
             type="button"
             onClick={handleReset}
-            className="px-3 py-2 rounded-xl text-xs font-semibold bg-slate-900 border border-slate-800 text-slate-200 cursor-pointer hover:bg-slate-800"
+            className="px-2.5 py-2 rounded-xl text-xs font-semibold bg-white/90 border border-stone-300 text-stone-800 cursor-pointer hover:bg-white shadow-xs"
           >
             Reset
           </button>
@@ -367,26 +428,33 @@ export const App = () => {
             type="button"
             onClick={handleHint}
             disabled={trace.isSolved}
-            className="px-3 py-2 rounded-xl text-xs font-semibold bg-amber-500/15 border border-amber-400/40 text-amber-300 disabled:opacity-40 cursor-pointer hover:bg-amber-500/25"
+            className="px-2.5 py-2 rounded-xl text-xs font-semibold bg-amber-100 border border-amber-300 text-amber-900 disabled:opacity-40 cursor-pointer hover:bg-amber-200/70"
           >
             Hint
           </button>
         </div>
 
         <div className="flex items-center gap-1.5">
+          <button
+            type="button"
+            onClick={() => setShowCreator(true)}
+            className="px-2.5 py-2 rounded-xl text-xs font-bold bg-[#1c1917] text-[#f5efe4] border border-[#b8893a] cursor-pointer hover:bg-stone-800"
+          >
+            + Create
+          </button>
           {trace.isSolved ? (
             <button
               type="button"
               onClick={() => setShowVictory(true)}
-              className="px-3.5 py-2 rounded-xl text-xs font-bold bg-emerald-400 text-slate-950 cursor-pointer"
+              className="px-3 py-2 rounded-xl text-xs font-bold bg-emerald-700 text-white cursor-pointer hover:bg-emerald-800"
             >
               Results
             </button>
-          ) : isDailyMode ? (
+          ) : boardMeta.isDaily ? (
             <button
               type="button"
               onClick={handleSwitchPractice}
-              className="px-3 py-2 rounded-xl text-xs font-semibold bg-slate-900 border border-slate-800 text-slate-400 cursor-pointer hover:text-slate-200"
+              className="px-2.5 py-2 rounded-xl text-xs font-semibold bg-white/80 border border-stone-300 text-stone-600 cursor-pointer hover:text-stone-900"
             >
               Archive
             </button>
@@ -394,75 +462,78 @@ export const App = () => {
             <button
               type="button"
               onClick={handleBackToDaily}
-              className="px-3 py-2 rounded-xl text-xs font-semibold bg-sky-500/20 border border-sky-400/40 text-sky-300 cursor-pointer"
+              className="px-2.5 py-2 rounded-xl text-xs font-semibold bg-sky-100 border border-sky-300 text-sky-900 cursor-pointer"
             >
-              Today's Daily
+              Daily
             </button>
           )}
         </div>
       </footer>
 
-      {/* Focused Single Victory / Community Result Card */}
+      {/* Focused Editorial Victory Card */}
       {showVictory ? (
-        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="w-full max-w-sm rounded-2xl bg-[#11192c] border border-slate-700 p-5 shadow-2xl space-y-4">
+        <div className="fixed inset-0 z-50 bg-stone-950/70 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="w-full max-w-sm rounded-2xl bg-[#f5efe4] border-2 border-[#b8893a] p-5 shadow-2xl space-y-4 text-stone-900">
             <div className="flex items-start justify-between gap-2">
               <div>
-                <span className="inline-block px-2 py-0.5 rounded-full text-[11px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-400/40">
-                  {moves <= puzzle.par ? '⚡ PAR CLEAR' : '✨ RELAY SOLVED'}
+                <span className="inline-block px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider bg-emerald-100 text-emerald-900 border border-emerald-300">
+                  {moves <= boardMeta.par ? '⚡ Par Clear' : '✨ Relay Solved'}
                 </span>
-                <h2 className="text-lg font-bold text-white mt-1">
-                  Prism Relay #{puzzle.puzzleNumber}
+                <h2 className="font-editorial text-xl font-bold text-stone-900 mt-1">
+                  {boardMeta.title}
                 </h2>
-                <p className="text-xs text-slate-400">
-                  {puzzle.title} · u/{username}
+                <p className="text-xs text-stone-500">
+                  {boardMeta.author
+                    ? `Community Relay by u/${boardMeta.author}`
+                    : `Edition #${boardMeta.puzzleNumber}`}{' '}
+                  · u/{username}
                 </p>
               </div>
               <button
                 type="button"
                 onClick={() => setShowVictory(false)}
                 aria-label="Close results"
-                className="text-slate-400 hover:text-white text-sm px-2 py-1 cursor-pointer"
+                className="text-stone-500 hover:text-stone-900 text-sm px-2 py-1 cursor-pointer"
               >
                 ✕
               </button>
             </div>
 
-            {/* Key Stats Grid */}
+            {/* Score Cards */}
             <div className="grid grid-cols-3 gap-2 text-center">
-              <div className="rounded-xl bg-slate-900/90 border border-slate-800 p-2.5">
-                <div className="text-lg font-bold font-mono text-white">
+              <div className="rounded-xl bg-white/90 border border-stone-300 p-2.5">
+                <div className="text-lg font-bold font-mono text-stone-900">
                   {moves}
                 </div>
-                <div className="text-[11px] text-slate-400">
-                  Par {puzzle.par}
+                <div className="text-[11px] text-stone-500">
+                  Par {boardMeta.par}
                 </div>
               </div>
-              <div className="rounded-xl bg-slate-900/90 border border-slate-800 p-2.5">
-                <div className="text-lg font-bold font-mono text-white">
+              <div className="rounded-xl bg-white/90 border border-stone-300 p-2.5">
+                <div className="text-lg font-bold font-mono text-stone-900">
                   {formatDuration(elapsedMs)}
                 </div>
-                <div className="text-[11px] text-slate-400">Time</div>
+                <div className="text-[11px] text-stone-500">Time</div>
               </div>
-              <div className="rounded-xl bg-slate-900/90 border border-slate-800 p-2.5">
-                <div className="text-lg font-bold font-mono text-amber-300">
+              <div className="rounded-xl bg-white/90 border border-stone-300 p-2.5">
+                <div className="text-lg font-bold font-mono text-amber-700">
                   🔥 {streak || 1}
                 </div>
-                <div className="text-[11px] text-slate-400">
+                <div className="text-[11px] text-stone-500">
                   Best {Math.max(bestStreak, streak, 1)}
                 </div>
               </div>
             </div>
 
-            {/* Community Distribution + Leaderboard */}
+            {/* Subreddit Histogram + Top 3 */}
             {stats && stats.totalSolvers > 0 ? (
-              <div className="space-y-2 rounded-xl bg-slate-900/70 border border-slate-800 p-3">
+              <div className="space-y-2 rounded-xl bg-white/85 border border-stone-300 p-3">
                 <div className="flex items-center justify-between text-xs">
-                  <span className="font-semibold text-slate-200">
-                    Community Today ({stats.totalSolvers})
+                  <span className="font-semibold text-stone-800">
+                    Subreddit Board ({stats.totalSolvers})
                   </span>
                   {percentile !== null ? (
-                    <span className="text-emerald-300 font-semibold">
+                    <span className="text-emerald-700 font-bold">
                       Top {percentile}%
                     </span>
                   ) : null}
@@ -474,32 +545,32 @@ export const App = () => {
                     { key: 'over', label: '+3+', count: stats.distribution.over ?? 0 },
                   ].map((row) => (
                     <div key={row.key} className="flex items-center gap-2">
-                      <span className="w-8 text-slate-400">{row.label}</span>
-                      <div className="flex-1 h-2 rounded-full bg-slate-800 overflow-hidden">
+                      <span className="w-8 text-stone-500">{row.label}</span>
+                      <div className="flex-1 h-2 rounded-full bg-stone-200 overflow-hidden">
                         <div
-                          className="h-full rounded-full bg-amber-400"
+                          className="h-full rounded-full bg-[#b8893a]"
                           style={{
                             width: `${Math.max(6, Math.round((row.count / distTotal) * 100))}%`,
                           }}
                         />
                       </div>
-                      <span className="w-6 text-right font-mono text-slate-300">
+                      <span className="w-6 text-right font-mono text-stone-700">
                         {row.count}
                       </span>
                     </div>
                   ))}
                 </div>
                 {stats.leaderboard.length > 0 ? (
-                  <div className="pt-2 border-t border-slate-800 space-y-1">
+                  <div className="pt-2 border-t border-stone-200 space-y-1">
                     {stats.leaderboard.slice(0, 3).map((entry) => (
                       <div
                         key={entry.username}
                         className="flex items-center justify-between text-[11px]"
                       >
-                        <span className="text-slate-300 truncate">
+                        <span className="text-stone-700 truncate font-medium">
                           #{entry.rank} u/{entry.username}
                         </span>
-                        <span className="font-mono text-slate-400">
+                        <span className="font-mono text-stone-500">
                           {entry.moves}m · {formatDuration(entry.timeMs)}
                         </span>
                       </div>
@@ -508,8 +579,8 @@ export const App = () => {
                 ) : null}
               </div>
             ) : playerRecord ? (
-              <div className="text-xs text-center text-slate-400">
-                Best today: {playerRecord.moves} moves ({formatDuration(playerRecord.timeMs)})
+              <div className="text-xs text-center text-stone-600">
+                Best recorded: {playerRecord.moves} moves ({formatDuration(playerRecord.timeMs)})
               </div>
             ) : null}
 
@@ -520,29 +591,37 @@ export const App = () => {
                 onClick={() => {
                   void handleCopyShare();
                 }}
-                className="w-full py-2.5 px-4 rounded-xl text-xs font-bold text-slate-950 bg-gradient-to-r from-amber-400 via-orange-400 to-rose-400 hover:brightness-110 cursor-pointer"
+                className="w-full py-2.5 px-4 rounded-xl text-xs font-bold text-[#f5efe4] bg-[#1c1917] border border-[#b8893a] hover:bg-stone-800 cursor-pointer"
               >
                 Copy Spoiler-Free Result for Comments
               </button>
               <div className="grid grid-cols-2 gap-2">
                 <button
                   type="button"
-                  onClick={handleSwitchPractice}
-                  className="py-2 px-3 rounded-xl text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-100 cursor-pointer"
+                  onClick={() => {
+                    setShowVictory(false);
+                    setShowCreator(true);
+                  }}
+                  className="py-2 px-3 rounded-xl text-xs font-semibold bg-amber-100 border border-amber-300 text-amber-950 hover:bg-amber-200/70 cursor-pointer"
                 >
-                  Play Archive Board
+                  Create &amp; Post Puzzle
                 </button>
                 <button
                   type="button"
-                  onClick={handleReset}
-                  className="py-2 px-3 rounded-xl text-xs font-semibold bg-slate-900 border border-slate-700 hover:bg-slate-800 text-slate-300 cursor-pointer"
+                  onClick={handleSwitchPractice}
+                  className="py-2 px-3 rounded-xl text-xs font-semibold bg-white border border-stone-300 text-stone-800 hover:bg-stone-100 cursor-pointer"
                 >
-                  Replay for Par
+                  Next Archive Board
                 </button>
               </div>
             </div>
           </div>
         </div>
+      ) : null}
+
+      {/* Community UGC Puzzle Creator */}
+      {showCreator ? (
+        <PuzzleCreatorModal onClose={() => setShowCreator(false)} />
       ) : null}
     </div>
   );

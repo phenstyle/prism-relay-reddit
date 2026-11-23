@@ -1,1 +1,53 @@
 @import 'tailwindcss';
+
+@layer base {
+  body {
+    background-color: #f5efe4;
+    color: #1c1917;
+  }
+}
+
+.atelier-paper {
+  background-color: #f5efe4;
+  background-image: radial-gradient(rgba(120, 113, 108, 0.22) 1px, transparent 1px);
+  background-size: 18px 18px;
+}
+
+.font-editorial {
+  font-family: 'Iowan Old Style', 'Palatino Linotype', Palatino, Georgia, serif;
+}
+
+@keyframes photonFlow {
+  from {
+    stroke-dashoffset: 28;
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+.beam-flow {
+  stroke-dasharray: 10 18;
+  animation: photonFlow 0.85s linear infinite;
+}
+
+@keyframes crystalBloom {
+  0% {
+    opacity: 0.9;
+    transform: scale(0.92);
+  }
+  50% {
+    opacity: 0.45;
+    transform: scale(1.06);
+  }
+  100% {
+    opacity: 0.9;
+    transform: scale(0.92);
+  }
+}
+
+.crystal-ring {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: crystalBloom 2.2s ease-in-out infinite;
+}

@@ -108,4 +108,43 @@ void describe('Prism Relay puzzleEngine', () => {
     assert.ok(text.includes('🔥 4-day streak'));
     assert.ok(text.includes('💎'));
   });
+
+  void it('validates and auto-scrambles community UGC boards accurately', async () => {
+    const { validateCustomGrid, autoScrambleCustomGrid } = await import(
+      '../shared/puzzleEngine.ts'
+    );
+    const puzzle = getDailyPuzzle('2026-11-22');
+    const check = validateCustomGrid(puzzle.grid);
+    assert.equal(check.valid, true);
+    if (check.valid) {
+      assert.equal(check.par, puzzle.par);
+    }
+
+    // Solve the board first, verify validateCustomGrid rejects already-solved boards,
+    // then verify autoScrambleCustomGrid produces a fresh unsolved valid board!
+    let solvedGrid = cloneGrid(puzzle.grid);
+    for (let r = 0; r < solvedGrid.length; r++) {
+      for (let c = 0; c < solvedGrid.length; c++) {
+        const cell = solvedGrid[r]?.[c];
+        if (!cell || (cell.kind !== 'mirror' && cell.kind !== 'splitter')) {
+          continue;
+        }
+        const target = puzzle.solutionOrientations[cellKey(r, c)];
+        if (target !== undefined && cell.orientation !== target) {
+          const next = toggleTileAt(solvedGrid, r, c);
+          if (next) solvedGrid = next;
+        }
+      }
+    }
+    const alreadySolvedCheck = validateCustomGrid(solvedGrid);
+    assert.equal(alreadySolvedCheck.valid, false);
+
+    const scrambled = autoScrambleCustomGrid(solvedGrid);
+    if (!scrambled) {
+      assert.fail('autoScrambleCustomGrid should find a valid scrambled state');
+    }
+    const scrambledCheck = validateCustomGrid(scrambled.grid);
+    assert.equal(scrambledCheck.valid, true);
+  });
 });
+
