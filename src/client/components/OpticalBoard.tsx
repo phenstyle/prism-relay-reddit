@@ -13,6 +13,7 @@ type OpticalBoardProps = {
   editorMode?: boolean;
   hintCell?: { row: number; col: number } | null;
   onboardingCell?: { row: number; col: number } | null;
+  reviewHighlight?: { row: number; col: number; moveNumber: number } | null;
   onTileTap?: (row: number, col: number) => void;
 };
 
@@ -67,6 +68,7 @@ export const OpticalBoard = ({
   editorMode = false,
   hintCell,
   onboardingCell,
+  reviewHighlight,
   onTileTap,
 }: OpticalBoardProps) => {
   const size = grid.length;
@@ -118,6 +120,8 @@ export const OpticalBoard = ({
             const isHint = hintCell?.row === r && hintCell?.col === c;
             const isOnboard =
               onboardingCell?.row === r && onboardingCell?.col === c;
+            const isReviewed =
+              reviewHighlight?.row === r && reviewHighlight?.col === c;
 
             return (
               <g key={`tile-${r}-${c}`}>
@@ -128,22 +132,26 @@ export const OpticalBoard = ({
                   height={CELL_UNIT - 8}
                   rx={12}
                   fill={
-                    cell.kind === 'block'
-                      ? '#27221f'
-                      : isRotatable
-                        ? '#1f1b18'
-                        : '#171412'
+                    isReviewed
+                      ? '#2d2417'
+                      : cell.kind === 'block'
+                        ? '#27221f'
+                        : isRotatable
+                          ? '#1f1b18'
+                          : '#171412'
                   }
                   stroke={
-                    isHint
-                      ? '#f59e0b'
-                      : isOnboard
-                        ? '#38bdf8'
-                        : isRotatable
-                          ? '#443c35'
-                          : '#26211d'
+                    isReviewed
+                      ? '#fbbf24'
+                      : isHint
+                        ? '#f59e0b'
+                        : isOnboard
+                          ? '#38bdf8'
+                          : isRotatable
+                            ? '#443c35'
+                            : '#26211d'
                   }
-                  strokeWidth={isHint || isOnboard ? 3 : 1.5}
+                  strokeWidth={isReviewed ? 3.5 : isHint || isOnboard ? 3 : 1.5}
                 />
                 {cell.kind === 'block' ? (
                   <g>
@@ -431,6 +439,32 @@ export const OpticalBoard = ({
             return null;
           })
         )}
+
+        {/* Move Review step badge */}
+        {reviewHighlight ? (
+          <g>
+            <rect
+              x={reviewHighlight.col * CELL_UNIT + 8}
+              y={reviewHighlight.row * CELL_UNIT + 8}
+              width={28}
+              height={20}
+              rx={10}
+              fill="#fbbf24"
+              stroke="#141210"
+              strokeWidth={2}
+            />
+            <text
+              x={reviewHighlight.col * CELL_UNIT + 22}
+              y={reviewHighlight.row * CELL_UNIT + 22}
+              textAnchor="middle"
+              fontSize={11}
+              fontWeight={800}
+              fill="#141210"
+            >
+              #{reviewHighlight.moveNumber}
+            </text>
+          </g>
+        ) : null}
       </svg>
 
       {/* Accessible interactive hit targets */}

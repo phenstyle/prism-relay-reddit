@@ -165,5 +165,20 @@ void describe('Prism Relay puzzleEngine', () => {
     const scrambledCheck = validateCustomGrid(scrambled.grid);
     assert.equal(scrambledCheck.valid, true);
   });
+
+  void it('builds an exact-Par step-by-step move review replay', async () => {
+    const { buildOptimalParReplay } = await import('../shared/puzzleEngine.ts');
+    const puzzle = getDailyPuzzle('2026-11-22');
+    const steps = buildOptimalParReplay(
+      puzzle.grid,
+      puzzle.solutionOrientations
+    );
+    assert.equal(steps.length, puzzle.par + 1);
+    assert.equal(steps[0]?.tappedCell, null);
+    assert.equal(traceBeams(steps[0]!.grid).isSolved, false);
+    const last = steps[steps.length - 1];
+    assert.ok(last?.tappedCell, 'Final replay step should record tapped cell');
+    assert.equal(traceBeams(last.grid).isSolved, true);
+  });
 });
 

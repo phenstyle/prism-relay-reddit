@@ -913,6 +913,29 @@ export const getHintCell = (
   return fallback;
 };
 
+export type ReplayStep = {
+  grid: GridCell[][];
+  tappedCell: { row: number; col: number } | null;
+};
+
+export const buildOptimalParReplay = (
+  initialGrid: GridCell[][],
+  solutionOrientations: Record<string, MirrorOrientation>
+): ReplayStep[] => {
+  const steps: ReplayStep[] = [{ grid: cloneGrid(initialGrid), tappedCell: null }];
+  let current = cloneGrid(initialGrid);
+  for (let guard = 0; guard < 12; guard++) {
+    if (traceBeams(current).isSolved) break;
+    const nextCell = getHintCell(current, solutionOrientations);
+    if (!nextCell) break;
+    const nextGrid = toggleTileAt(current, nextCell.row, nextCell.col);
+    if (!nextGrid) break;
+    current = nextGrid;
+    steps.push({ grid: cloneGrid(current), tappedCell: nextCell });
+  }
+  return steps;
+};
+
 export const formatDuration = (ms: number): string => {
   const totalSec = Math.max(0, Math.floor(ms / 1000));
   const mins = Math.floor(totalSec / 60);

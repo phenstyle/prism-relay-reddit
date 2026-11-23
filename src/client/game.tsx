@@ -10,9 +10,14 @@ import type {
   PlayerDailyRecord,
   SubmitSolveResponse,
 } from '../shared/api';
-import type { GridCell, MirrorOrientation } from '../shared/puzzleEngine';
+import type {
+  GridCell,
+  MirrorOrientation,
+  ReplayStep,
+} from '../shared/puzzleEngine';
 import {
   COLOR_META,
+  buildOptimalParReplay,
   buildSpoilerFreeShareText,
   cloneGrid,
   formatDateKeyUtc,
@@ -89,6 +94,9 @@ export const App = () => {
     cloneGrid(dailyPuzzle.grid)
   );
   const [history, setHistory] = useState<GridCell[][][]>([]);
+  const [moveSteps, setMoveSteps] = useState<ReplayStep[]>(() => [
+    { grid: cloneGrid(dailyPuzzle.grid), tappedCell: null },
+  ]);
   const [moves, setMoves] = useState<number>(0);
   const [elapsedMs, setElapsedMs] = useState<number>(0);
   const [muted, setMuted] = useState<boolean>(false);
@@ -97,17 +105,51 @@ export const App = () => {
   );
   const [showVictory, setShowVictory] = useState<boolean>(false);
   const [showCreator, setShowCreator] = useState<boolean>(false);
+  const [isReviewing, setIsReviewing] = useState<boolean>(false);
+  const [reviewSource, setReviewSource] = useState<'yours' | 'par'>('yours');
+  const [reviewIndex, setReviewIndex] = useState<number>(0);
+  const [reviewPlaying, setReviewPlaying] = useState<boolean>(false);
 
   const startTimeRef = useRef<number>(0);
   const solvedSubmittedRef = useRef<boolean>(false);
   const prevMatchedCountRef = useRef<number>(0);
   const victoryTimerRef = useRef<number | null>(null);
 
-  const trace = useMemo(() => traceBeams(grid), [grid]);
-  const matchedCount = useMemo(
-    () => trace.receptors.filter((r) => r.matched).length,
-    [trace.receptors]
+  const optimalParSteps = useMemo(
+    () =>
+      buildOptimalParReplay(
+        boardMeta.initialGrid,
+        boardMeta.solutionOrientations
+      ),
+    [boardMeta.initialGrid, boardMeta.solutionOrientations]
   );
+
+  const activeReplaySteps = useMemo(
+    () => (reviewSource === 'par' ? optimalParSteps : moveSteps),
+    [reviewSource, optimalParSteps, moveSteps]
+  );
+
+  const trace = useMemo(() => traceBeams(grid), [grid]);
+  const displayGrid = useMemo(() => {
+    if (!isReviewing) return grid;
+    const clamped = Math.min(reviewIndex, activeReplaySteps.length - 1);
+    return activeReplaySteps[Math.max(0, clamped)]?.grid ?? grid;
+  }, [isReviewing, reviewIndex, activeReplaySteps, grid]);
+  const displayTrace = useMemo(() => traceBeams(displayGrid), [displayGrid]);
+  const matchedCount = useMemo(
+    () => displayTrace.receptors.filter((r) => r.matched).length,
+    [displayTrace.receptors]
+  );
+  const reviewHighlight = useMemo(() => {
+    if (!isReviewing || reviewIndex <= 0) return null;
+    const step = activeReplaySteps[reviewIndex];
+    if (!step?.tappedCell) return null;
+    return {
+      row: step.tappedCell.row,
+      col: step.tappedCell.col,
+      moveNumber: reviewIndex,
+    };
+  }, [isReviewing, reviewIndex, activeReplaySteps]);
 
   const resetWithGrid = (nextGrid: GridCell[][]) => {
     if (victoryTimerRef.current !== null) {
@@ -116,10 +158,15 @@ export const App = () => {
     }
     setGrid(cloneGrid(nextGrid));
     setHistory([]);
+    setMoveSteps([{ grid: cloneGrid(nextGrid), tappedCell: null }]);
     setMoves(0);
     setElapsedMs(0);
     setHintCell(null);
     setShowVictory(false);
+    setIsReviewing(false);
+    setReviewSource('yours');
+    setReviewIndex(0);
+    setReviewPlaying(false);
     startTimeRef.current = Date.now();
     solvedSubmittedRef.current = false;
     prevMatchedCountRef.current = traceBeams(nextGrid).receptors.filter(
@@ -226,8 +273,46 @@ export const App = () => {
     return list;
   }, [trace.receptors]);
 
+  // Auto-play Move Review playback
+  useEffect(() => {
+    if (!isReviewing || !reviewPlaying) return;
+    const maxIdx = activeReplaySteps.length - 1;
+    const id = window.setInterval(() => {
+      setReviewIndex((prev) => {
+        if (prev >= maxIdx) {
+          setReviewPlaying(false);
+          return prev;
+        }
+        const nextIdx = prev + 1;
+        const nextStep = activeReplaySteps[nextIdx];
+        if (nextStep) {
+          const stepTrace = traceBeams(nextStep.grid);
+          if (stepTrace.isSolved) {
+            playSolveChord(muted);
+          } else {
+            playMirrorClick(muted);
+          }
+        }
+        if (nextIdx >= maxIdx) {
+          setReviewPlaying(false);
+        }
+        return nextIdx;
+      });
+    }, 750);
+    return () => window.clearInterval(id);
+  }, [isReviewing, reviewPlaying, activeReplaySteps, muted]);
+
+  const enterMoveReview = (autoPlay: boolean, source: 'yours' | 'par' = 'yours') => {
+    const steps = source === 'par' ? optimalParSteps : moveSteps;
+    setShowVictory(false);
+    setReviewSource(source);
+    setIsReviewing(true);
+    setReviewIndex(autoPlay ? 0 : Math.max(0, steps.length - 1));
+    setReviewPlaying(autoPlay);
+  };
+
   const handleTileTap = (row: number, col: number) => {
-    if (trace.isSolved) return;
+    if (trace.isSolved || isReviewing) return;
     const next = toggleTileAt(grid, row, col);
     if (!next) return;
     const nextMoves = moves + 1;
@@ -235,6 +320,10 @@ export const App = () => {
     const nextMatched = nextTrace.receptors.filter((r) => r.matched).length;
 
     setHistory((prev) => [...prev, grid]);
+    setMoveSteps((prev) => [
+      ...prev,
+      { grid: cloneGrid(next), tappedCell: { row, col } },
+    ]);
     setGrid(next);
     setMoves(nextMoves);
     setHintCell(null);
@@ -252,7 +341,7 @@ export const App = () => {
       victoryTimerRef.current = window.setTimeout(() => {
         setShowVictory(true);
         victoryTimerRef.current = null;
-      }, 650);
+      }, 1100);
     } else if (nextMatched > prevMatchedCountRef.current) {
       playCrystalLock(muted);
     } else {
@@ -262,10 +351,11 @@ export const App = () => {
   };
 
   const handleUndo = () => {
-    if (history.length === 0 || trace.isSolved) return;
+    if (history.length === 0 || trace.isSolved || isReviewing) return;
     const previous = history[history.length - 1];
     if (!previous) return;
     setHistory((prev) => prev.slice(0, -1));
+    setMoveSteps((prev) => (prev.length > 1 ? prev.slice(0, -1) : prev));
     setGrid(previous);
     setMoves((m) => Math.max(0, m - 1));
     setHintCell(null);
@@ -377,108 +467,206 @@ export const App = () => {
       {/* Main Optical Board */}
       <main className="w-full max-w-lg mx-auto flex-1 flex flex-col items-center justify-center min-h-0 py-1.5 gap-2">
         <OpticalBoard
-          grid={grid}
-          trace={trace}
-          interactive={!trace.isSolved}
-          hintCell={hintCell}
-          onboardingCell={onboardingCell}
+          grid={displayGrid}
+          trace={displayTrace}
+          interactive={!trace.isSolved && !isReviewing}
+          hintCell={isReviewing ? null : hintCell}
+          onboardingCell={isReviewing ? null : onboardingCell}
+          reviewHighlight={reviewHighlight}
           onTileTap={handleTileTap}
         />
 
-        {/* Compact Color Mix Key & Crystal Counter */}
+        {/* Compact Color Mix Key or Move Review Step Readout + Crystal Counter */}
         <div className="w-full max-w-[412px] flex flex-wrap items-center justify-between gap-2 px-1 text-[11px] text-stone-700">
           <div className="flex flex-wrap items-center gap-1.5">
-            {activeRecipes.map(({ mask, recipe }) => {
-              const meta = COLOR_META[mask];
-              return (
-                <span
-                  key={mask}
-                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-white/90 border border-stone-300 shadow-xs"
-                >
-                  <span className="text-stone-600 font-medium">{recipe} =</span>
-                  <span style={{ color: meta.hex }} className="font-bold">
-                    {meta.symbol} {meta.name}
+            {isReviewing ? (
+              <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-amber-100 border border-amber-300 text-amber-950 font-semibold">
+                {reviewSource === 'par' ? '⚡ Optimal Par' : 'Move Review'} ·{' '}
+                {reviewIndex === 0
+                  ? 'Start'
+                  : `Move ${reviewIndex}/${Math.max(1, activeReplaySteps.length - 1)}`}
+              </span>
+            ) : (
+              activeRecipes.map(({ mask, recipe }) => {
+                const meta = COLOR_META[mask];
+                return (
+                  <span
+                    key={mask}
+                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-white/90 border border-stone-300 shadow-xs"
+                  >
+                    <span className="text-stone-600 font-medium">{recipe} =</span>
+                    <span style={{ color: meta.hex }} className="font-bold">
+                      {meta.symbol} {meta.name}
+                    </span>
                   </span>
-                </span>
-              );
-            })}
+                );
+              })
+            )}
           </div>
 
           <div className="font-semibold text-stone-800">
             Crystals:{' '}
             <span
               className={
-                trace.isSolved ? 'text-emerald-700' : 'text-[#8c6220]'
+                displayTrace.isSolved ? 'text-emerald-700' : 'text-[#8c6220]'
               }
             >
-              {matchedCount}/{trace.receptors.length}
+              {matchedCount}/{displayTrace.receptors.length}
             </span>
           </div>
         </div>
       </main>
 
-      {/* Bottom Craft Control Dock */}
+      {/* Bottom Craft Control Dock (Switches to Chess-style Move Review scrubber after solve) */}
       <footer className="w-full max-w-[412px] mx-auto flex items-center justify-between gap-1.5 pt-1">
-        <div className="flex items-center gap-1.5">
-          <button
-            type="button"
-            onClick={handleUndo}
-            disabled={history.length === 0 || trace.isSolved}
-            className="px-2.5 py-2 rounded-xl text-xs font-semibold bg-white/90 border border-stone-300 text-stone-800 disabled:opacity-40 cursor-pointer hover:bg-white shadow-xs"
-          >
-            Undo
-          </button>
-          <button
-            type="button"
-            onClick={handleReset}
-            className="px-2.5 py-2 rounded-xl text-xs font-semibold bg-white/90 border border-stone-300 text-stone-800 cursor-pointer hover:bg-white shadow-xs"
-          >
-            Reset
-          </button>
-          <button
-            type="button"
-            onClick={handleHint}
-            disabled={trace.isSolved}
-            className="px-2.5 py-2 rounded-xl text-xs font-semibold bg-amber-100 border border-amber-300 text-amber-900 disabled:opacity-40 cursor-pointer hover:bg-amber-200/70"
-          >
-            Hint
-          </button>
-        </div>
+        {isReviewing ? (
+          <>
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                aria-label="Jump to start"
+                disabled={reviewIndex <= 0}
+                onClick={() => {
+                  setReviewPlaying(false);
+                  setReviewIndex(0);
+                }}
+                className="px-2 py-2 rounded-xl text-xs font-bold bg-white/90 border border-stone-300 text-stone-800 disabled:opacity-35 cursor-pointer hover:bg-white shadow-xs"
+              >
+                ⏮
+              </button>
+              <button
+                type="button"
+                aria-label="Previous move"
+                disabled={reviewIndex <= 0}
+                onClick={() => {
+                  setReviewPlaying(false);
+                  setReviewIndex((i) => Math.max(0, i - 1));
+                }}
+                className="px-2.5 py-2 rounded-xl text-xs font-bold bg-white/90 border border-stone-300 text-stone-800 disabled:opacity-35 cursor-pointer hover:bg-white shadow-xs"
+              >
+                ◀
+              </button>
+              <button
+                type="button"
+                aria-label={reviewPlaying ? 'Pause replay' : 'Play replay'}
+                onClick={() => {
+                  if (reviewPlaying) {
+                    setReviewPlaying(false);
+                  } else {
+                    if (reviewIndex >= activeReplaySteps.length - 1) {
+                      setReviewIndex(0);
+                    }
+                    setReviewPlaying(true);
+                  }
+                }}
+                className="px-3 py-2 rounded-xl text-xs font-bold bg-amber-100 border border-amber-300 text-amber-950 cursor-pointer hover:bg-amber-200/70"
+              >
+                {reviewPlaying ? '⏸' : '▶'}
+              </button>
+              <button
+                type="button"
+                aria-label="Next move"
+                disabled={reviewIndex >= activeReplaySteps.length - 1}
+                onClick={() => {
+                  setReviewPlaying(false);
+                  setReviewIndex((i) =>
+                    Math.min(activeReplaySteps.length - 1, i + 1)
+                  );
+                }}
+                className="px-2.5 py-2 rounded-xl text-xs font-bold bg-white/90 border border-stone-300 text-stone-800 disabled:opacity-35 cursor-pointer hover:bg-white shadow-xs"
+              >
+                ▶|
+              </button>
+            </div>
+            <div className="flex items-center gap-1">
+              {moves > boardMeta.par ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const nextSrc = reviewSource === 'yours' ? 'par' : 'yours';
+                    enterMoveReview(false, nextSrc);
+                  }}
+                  className="px-2.5 py-2 rounded-xl text-xs font-bold bg-white/90 border border-amber-400 text-amber-900 cursor-pointer hover:bg-amber-50"
+                >
+                  {reviewSource === 'yours' ? `⚡ Par (${boardMeta.par})` : 'Your Moves'}
+                </button>
+              ) : null}
+              <button
+                type="button"
+                onClick={() => {
+                  setReviewPlaying(false);
+                  setShowVictory(true);
+                }}
+                className="px-3 py-2 rounded-xl text-xs font-bold bg-emerald-700 text-white cursor-pointer hover:bg-emerald-800"
+              >
+                Results
+              </button>
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="flex items-center gap-1.5">
+              <button
+                type="button"
+                onClick={handleUndo}
+                disabled={history.length === 0 || trace.isSolved}
+                className="px-2.5 py-2 rounded-xl text-xs font-semibold bg-white/90 border border-stone-300 text-stone-800 disabled:opacity-40 cursor-pointer hover:bg-white shadow-xs"
+              >
+                Undo
+              </button>
+              <button
+                type="button"
+                onClick={handleReset}
+                className="px-2.5 py-2 rounded-xl text-xs font-semibold bg-white/90 border border-stone-300 text-stone-800 cursor-pointer hover:bg-white shadow-xs"
+              >
+                Reset
+              </button>
+              <button
+                type="button"
+                onClick={handleHint}
+                disabled={trace.isSolved}
+                className="px-2.5 py-2 rounded-xl text-xs font-semibold bg-amber-100 border border-amber-300 text-amber-900 disabled:opacity-40 cursor-pointer hover:bg-amber-200/70"
+              >
+                Hint
+              </button>
+            </div>
 
-        <div className="flex items-center gap-1.5">
-          <button
-            type="button"
-            onClick={() => setShowCreator(true)}
-            className="px-2.5 py-2 rounded-xl text-xs font-bold bg-[#1c1917] text-[#f5efe4] border border-[#b8893a] cursor-pointer hover:bg-stone-800"
-          >
-            + Create
-          </button>
-          {trace.isSolved ? (
-            <button
-              type="button"
-              onClick={() => setShowVictory(true)}
-              className="px-3 py-2 rounded-xl text-xs font-bold bg-emerald-700 text-white cursor-pointer hover:bg-emerald-800"
-            >
-              Results
-            </button>
-          ) : boardMeta.isDaily ? (
-            <button
-              type="button"
-              onClick={handleSwitchPractice}
-              className="px-2.5 py-2 rounded-xl text-xs font-semibold bg-white/80 border border-stone-300 text-stone-600 cursor-pointer hover:text-stone-900"
-            >
-              Archive
-            </button>
-          ) : (
-            <button
-              type="button"
-              onClick={handleBackToDaily}
-              className="px-2.5 py-2 rounded-xl text-xs font-semibold bg-sky-100 border border-sky-300 text-sky-900 cursor-pointer"
-            >
-              Daily
-            </button>
-          )}
-        </div>
+            <div className="flex items-center gap-1.5">
+              <button
+                type="button"
+                onClick={() => setShowCreator(true)}
+                className="px-2.5 py-2 rounded-xl text-xs font-bold bg-[#1c1917] text-[#f5efe4] border border-[#b8893a] cursor-pointer hover:bg-stone-800"
+              >
+                + Create
+              </button>
+              {trace.isSolved ? (
+                <button
+                  type="button"
+                  onClick={() => enterMoveReview(false, 'yours')}
+                  className="px-3 py-2 rounded-xl text-xs font-bold bg-emerald-700 text-white cursor-pointer hover:bg-emerald-800"
+                >
+                  Review
+                </button>
+              ) : boardMeta.isDaily ? (
+                <button
+                  type="button"
+                  onClick={handleSwitchPractice}
+                  className="px-2.5 py-2 rounded-xl text-xs font-semibold bg-white/80 border border-stone-300 text-stone-600 cursor-pointer hover:text-stone-900"
+                >
+                  Archive
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={handleBackToDaily}
+                  className="px-2.5 py-2 rounded-xl text-xs font-semibold bg-sky-100 border border-sky-300 text-sky-900 cursor-pointer"
+                >
+                  Daily
+                </button>
+              )}
+            </div>
+          </>
+        )}
       </footer>
 
       {/* Focused Editorial Victory Card */}
@@ -502,8 +690,8 @@ export const App = () => {
               </div>
               <button
                 type="button"
-                onClick={() => setShowVictory(false)}
-                aria-label="Close results"
+                onClick={() => enterMoveReview(false, 'yours')}
+                aria-label="Close results and review moves"
                 className="text-stone-500 hover:text-stone-900 text-sm px-2 py-1 cursor-pointer"
               >
                 ✕
@@ -609,13 +797,10 @@ export const App = () => {
               <div className="grid grid-cols-2 gap-2">
                 <button
                   type="button"
-                  onClick={() => {
-                    setShowVictory(false);
-                    setShowCreator(true);
-                  }}
-                  className="py-2 px-3 rounded-xl text-xs font-semibold bg-amber-100 border border-amber-300 text-amber-950 hover:bg-amber-200/70 cursor-pointer"
+                  onClick={() => enterMoveReview(true, 'yours')}
+                  className="py-2 px-3 rounded-xl text-xs font-bold bg-amber-100 border border-amber-300 text-amber-950 hover:bg-amber-200/70 cursor-pointer"
                 >
-                  Create &amp; Post Puzzle
+                  ▶ Review Moves
                 </button>
                 <button
                   type="button"
@@ -625,6 +810,16 @@ export const App = () => {
                   Next Archive Board
                 </button>
               </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowVictory(false);
+                  setShowCreator(true);
+                }}
+                className="w-full py-1.5 px-3 rounded-xl text-[11px] font-semibold bg-white/70 border border-stone-300 text-stone-700 hover:bg-white cursor-pointer"
+              >
+                + Build &amp; Post Your Own Puzzle
+              </button>
             </div>
           </div>
         </div>
