@@ -530,9 +530,9 @@ export const App = () => {
                   setReviewPlaying(false);
                   setReviewIndex(0);
                 }}
-                className="px-2 py-2 rounded-xl text-xs font-bold bg-white/90 border border-stone-300 text-stone-800 disabled:opacity-35 cursor-pointer hover:bg-white shadow-xs"
+                className="px-2 py-2 rounded-xl text-xs font-bold bg-white/90 border border-stone-300 text-stone-800 disabled:opacity-35 cursor-pointer hover:bg-white shadow-xs whitespace-nowrap"
               >
-                ⏮
+                |◀
               </button>
               <button
                 type="button"
@@ -542,7 +542,7 @@ export const App = () => {
                   setReviewPlaying(false);
                   setReviewIndex((i) => Math.max(0, i - 1));
                 }}
-                className="px-2.5 py-2 rounded-xl text-xs font-bold bg-white/90 border border-stone-300 text-stone-800 disabled:opacity-35 cursor-pointer hover:bg-white shadow-xs"
+                className="px-2.5 py-2 rounded-xl text-xs font-bold bg-white/90 border border-stone-300 text-stone-800 disabled:opacity-35 cursor-pointer hover:bg-white shadow-xs whitespace-nowrap"
               >
                 ◀
               </button>
@@ -559,7 +559,7 @@ export const App = () => {
                     setReviewPlaying(true);
                   }
                 }}
-                className="px-3 py-2 rounded-xl text-xs font-bold bg-amber-100 border border-amber-300 text-amber-950 cursor-pointer hover:bg-amber-200/70"
+                className="px-3 py-2 rounded-xl text-xs font-bold bg-amber-100 border border-amber-300 text-amber-950 cursor-pointer hover:bg-amber-200/70 whitespace-nowrap"
               >
                 {reviewPlaying ? '⏸' : '▶'}
               </button>
@@ -573,7 +573,7 @@ export const App = () => {
                     Math.min(activeReplaySteps.length - 1, i + 1)
                   );
                 }}
-                className="px-2.5 py-2 rounded-xl text-xs font-bold bg-white/90 border border-stone-300 text-stone-800 disabled:opacity-35 cursor-pointer hover:bg-white shadow-xs"
+                className="px-2.5 py-2 rounded-xl text-xs font-bold bg-white/90 border border-stone-300 text-stone-800 disabled:opacity-35 cursor-pointer hover:bg-white shadow-xs whitespace-nowrap"
               >
                 ▶|
               </button>
@@ -586,9 +586,9 @@ export const App = () => {
                     const nextSrc = reviewSource === 'yours' ? 'par' : 'yours';
                     enterMoveReview(false, nextSrc);
                   }}
-                  className="px-2.5 py-2 rounded-xl text-xs font-bold bg-white/90 border border-amber-400 text-amber-900 cursor-pointer hover:bg-amber-50"
+                  className="px-2.5 py-2 rounded-xl text-xs font-bold bg-white/90 border border-amber-400 text-amber-900 cursor-pointer hover:bg-amber-50 whitespace-nowrap"
                 >
-                  {reviewSource === 'yours' ? `⚡ Par (${boardMeta.par})` : 'Your Moves'}
+                  {reviewSource === 'yours' ? `⚡ Par` : 'Yours'}
                 </button>
               ) : null}
               <button
